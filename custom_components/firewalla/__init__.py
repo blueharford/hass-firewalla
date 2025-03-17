@@ -12,6 +12,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
+from homeassistant.const import (
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
+)
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     DOMAIN,
@@ -21,6 +29,9 @@ from .const import (
     DEFAULT_SUBDOMAIN,
     COORDINATOR,
     API_CLIENT,
+    CONF_API_KEY,
+    CONF_API_SECRET,
+    CONF_USE_MOCK_DATA,
 )
 from .api import FirewallaApiClient
 
@@ -47,60 +58,108 @@ async def async_setup(hass: HomeAssistant, config: dict):
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Firewalla from a config entry."""
-    api_token = entry.data[CONF_API_TOKEN]
-    subdomain = entry.data.get(CONF_SUBDOMAIN, DEFAULT_SUBDOMAIN)
+    hass.data.setdefault(DOMAIN, {})
     
     session = async_get_clientsession(hass)
-    api_client = FirewallaApiClient(api_token, subdomain, session)
     
-    # Verify credentials
-    try:
-        await api_client.async_check_credentials()
-    except Exception as exc:
-        _LOGGER.error("Failed to connect to Firewalla API: %s", exc)
-        return False
-    
-    async def async_update_data():
-        """Fetch data from API."""
-        try:
-            async with async_timeout.timeout(30):
-                # Get all the data we need for the platforms
-                devices = await api_client.async_get_devices()
-                flows = await api_client.async_get_flows()
-                alarms = await api_client.async_get_alarms()
-                rules = await api_client.async_get_rules()
-                
-                return {
-                    "devices": devices,
-                    "flows": flows,
-                    "alarms": alarms,
-                    "rules": rules,
-                }
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with API: {err}")
-    
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name=DOMAIN,
-        update_method=async_update_data,
-        update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+    client = FirewallaApiClient(
+        session=session,
+        email=entry.data.get(CONF_EMAIL),
+        password=entry.data.get(CONF_PASSWORD),
+        api_key=entry.data.get(CONF_API_KEY),
+        api_secret=entry.data.get(CONF_API_SECRET),
+        subdomain=entry.data.get(CONF_SUBDOMAIN),
+        use_mock_data=entry.data.get(CONF_USE_MOCK_DATA, False),
     )
     
-    # Fetch initial data
-    await coordinator.async_config_entry_first_refresh()
+    # Test the API connection
+    if not await client.authenticate():
+        raise ConfigEntryNotReady("Failed to authenticate with Firewalla API")
     
+    # Store the client
     hass.data[DOMAIN][entry.entry_id] = {
-        COORDINATOR: coordinator,
-        API_CLIENT: api_client,
+        "client": client,
+        "devices": {},
     }
     
+    # Get initial devices
+    try:
+        devices = await client.get_devices()
+        if not devices and not entry.data.get(CONF_USE_MOCK_DATA, False):
+            _LOGGER.warning("No devices found from Firewalla API. Check your network configuration.")
+        
+        hass.data[DOMAIN][entry.entry_id]["devices"] = {
+            device["id"]: device for device in devices
+        }
+        _LOGGER.debug("Found %s devices from Firewalla", len(devices))
+    except Exception as exc:
+        _LOGGER.error("Error fetching initial devices: %s", exc)
+        if not entry.data.get(CONF_USE_MOCK_DATA, False):
+            raise ConfigEntryNotReady("Failed to fetch initial device data") from exc
+    
+    # Set up platforms
     for platform in PLATFORMS:
         hass.async_create_task(
             hass.config_entries.async_forward_entry_setup(entry, platform)
         )
+    
+    # Set up update listener
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
+    
+    # Set up periodic data refresh
+    scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    
+    async def async_update_data():
+        """Update data from Firewalla."""
+        try:
+            devices = await client.get_devices()
+            
+            # Check for new devices
+            current_devices = hass.data[DOMAIN][entry.entry_id]["devices"]
+            new_devices = {}
+            updated_devices = {}
+            
+            for device in devices:
+                device_id = device["id"]
+                if device_id not in current_devices:
+                    new_devices[device_id] = device
+                else:
+                    # Check if device data has changed
+                    if current_devices[device_id] != device:
+                        updated_devices[device_id] = device
+            
+            # Update the devices dictionary
+            hass.data[DOMAIN][entry.entry_id]["devices"] = {
+                device["id"]: device for device in devices
+            }
+            
+            # Log the update results
+            if new_devices:
+                _LOGGER.info("Found %s new devices from Firewalla", len(new_devices))
+                # Notify about new devices
+                async_dispatcher_send(
+                    hass, 
+                    f"{DOMAIN}_{entry.entry_id}_device_update", 
+                    new_devices
+                )
+            
+            if updated_devices:
+                _LOGGER.debug("Updated %s existing devices from Firewalla", len(updated_devices))
+            
+            # Notify all entities to update
+            async_dispatcher_send(hass, f"{DOMAIN}_{entry.entry_id}_update")
+            
+        except Exception as exc:
+            _LOGGER.error("Error updating devices: %s", exc)
+    
+    # Create the update timer
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, async_update_data, timedelta(seconds=scan_interval)
+        )
+    )
     
     return True
 
@@ -120,4 +179,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         hass.data[DOMAIN].pop(entry.entry_id)
     
     return unload_ok
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
+    """Update options."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
