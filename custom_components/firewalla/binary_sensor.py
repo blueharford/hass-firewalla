@@ -40,12 +40,34 @@ async def async_setup_entry(
     # Add online status sensors for each device
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
-            entities.append(FirewallaOnlineSensor(coordinator, device))
+            if isinstance(device, dict) and "id" in device:
+                entities.append(FirewallaOnlineSensor(coordinator, device))
+            else:
+                _LOGGER.warning("Skipping device without id: %s", device)
     
     # Add online status sensors for each box
     if coordinator.data and "boxes" in coordinator.data:
         for box in coordinator.data["boxes"]:
-            entities.append(FirewallaBoxOnlineSensor(coordinator, box))
+            if isinstance(box, dict) and "id" in box:
+                entities.append(FirewallaBoxOnlineSensor(coordinator, box))
+            else:
+                _LOGGER.warning("Skipping box without id: %s", box)
+    
+    # Add alarm sensors
+    if coordinator.data and "alarms" in coordinator.data:
+        for alarm in coordinator.data["alarms"]:
+            if isinstance(alarm, dict) and "id" in alarm:
+                entities.append(FirewallaAlarmSensor(coordinator, alarm))
+            else:
+                _LOGGER.warning("Skipping alarm without id: %s", alarm)
+    
+    # Add rule status sensors
+    if coordinator.data and "rules" in coordinator.data:
+        for rule in coordinator.data["rules"]:
+            if isinstance(rule, dict) and "id" in rule:
+                entities.append(FirewallaRuleStatusSensor(coordinator, rule))
+            else:
+                _LOGGER.warning("Skipping rule without id: %s", rule)
     
     async_add_entities(entities)
 
@@ -204,4 +226,112 @@ class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):
                 
             except (ValueError, TypeError):
                 pass
+
+
+class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor for Firewalla alarms."""
+
+    def __init__(self, coordinator, alarm):
+        """Initialize the binary sensor."""
+        super().__init__(coordinator)
+        self.alarm_id = alarm["id"]
+        self._attr_name = f"Firewalla Alarm {alarm.get('type', 'Unknown')}"
+        self._attr_unique_id = f"{DOMAIN}_alarm_{self.alarm_id}"
+        self._attr_device_class = BinarySensorDeviceClass.PROBLEM
+        
+        # Set up device info - associate with the box if possible
+        box_id = alarm.get("boxId") or alarm.get("box_id")
+        if box_id:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, f"box_{box_id}")},
+                name=f"Firewalla Box {box_id}",
+                manufacturer="Firewalla",
+                model="Firewalla Box",
+            )
+        
+        self._update_attributes(alarm)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "alarms" not in self.coordinator.data:
+            return
+            
+        for alarm in self.coordinator.data["alarms"]:
+            if alarm["id"] == self.alarm_id:
+                self._update_attributes(alarm)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, alarm: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        # Alarm is active if it's not cleared
+        self._attr_is_on = not alarm.get("cleared", False)
+        
+        # Set additional attributes
+        self._attr_extra_state_attributes = {
+            ATTR_ALARM_ID: self.alarm_id,
+            "type": alarm.get("type", "Unknown"),
+            "message": alarm.get("message", ""),
+            "timestamp": alarm.get("timestamp", ""),
+        }
+        
+        # Add device info if available
+        device_id = alarm.get("deviceId") or alarm.get("device_id")
+        if device_id:
+            self._attr_extra_state_attributes[ATTR_DEVICE_ID] = device_id
+
+
+class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor for Firewalla rule status."""
+
+    def __init__(self, coordinator, rule):
+        """Initialize the binary sensor."""
+        super().__init__(coordinator)
+        self.rule_id = rule["id"]
+        self._attr_name = f"Firewalla Rule {rule.get('name', 'Unknown')}"
+        self._attr_unique_id = f"{DOMAIN}_rule_{self.rule_id}"
+        self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        
+        # Set up device info - associate with the box if possible
+        box_id = rule.get("boxId") or rule.get("box_id")
+        if box_id:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, f"box_{box_id}")},
+                name=f"Firewalla Box {box_id}",
+                manufacturer="Firewalla",
+                model="Firewalla Box",
+            )
+        
+        self._update_attributes(rule)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "rules" not in self.coordinator.data:
+            return
+            
+        for rule in self.coordinator.data["rules"]:
+            if rule["id"] == self.rule_id:
+                self._update_attributes(rule)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, rule: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        # Rule is active if it's enabled
+        self._attr_is_on = rule.get("enabled", False)
+        
+        # Set additional attributes
+        self._attr_extra_state_attributes = {
+            ATTR_RULE_ID: self.rule_id,
+            "name": rule.get("name", "Unknown"),
+            "type": rule.get("type", "Unknown"),
+            "target": rule.get("target", ""),
+            "created_at": rule.get("createdAt", ""),
+        }
 

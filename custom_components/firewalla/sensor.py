@@ -42,16 +42,30 @@ async def async_setup_entry(
     # Add sensors for each device
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
-            entities.append(FirewallaUploadSensor(coordinator, device))
-            entities.append(FirewallaDownloadSensor(coordinator, device))
-            entities.append(FirewallaBlockedCountSensor(coordinator, device))
+            if isinstance(device, dict) and "id" in device:
+                entities.append(FirewallaUploadSensor(coordinator, device))
+                entities.append(FirewallaDownloadSensor(coordinator, device))
+                entities.append(FirewallaBlockedCountSensor(coordinator, device))
+            else:
+                _LOGGER.warning("Skipping device without id: %s", device)
     
     # Add sensors for each box
     if coordinator.data and "boxes" in coordinator.data:
         for box in coordinator.data["boxes"]:
-            entities.append(FirewallaBoxCPUSensor(coordinator, box))
-            entities.append(FirewallaBoxMemorySensor(coordinator, box))
-            entities.append(FirewallaBoxTemperatureSensor(coordinator, box))
+            if isinstance(box, dict) and "id" in box:
+                entities.append(FirewallaBoxCPUSensor(coordinator, box))
+                entities.append(FirewallaBoxMemorySensor(coordinator, box))
+                entities.append(FirewallaBoxTemperatureSensor(coordinator, box))
+            else:
+                _LOGGER.warning("Skipping box without id: %s", box)
+    
+    # Add flow sensors
+    if coordinator.data and "flows" in coordinator.data:
+        for flow in coordinator.data["flows"]:
+            if isinstance(flow, dict) and "id" in flow:
+                entities.append(FirewallaFlowSensor(coordinator, flow))
+            else:
+                _LOGGER.warning("Skipping flow without id: %s", flow)
     
     async_add_entities(entities)
 
@@ -308,4 +322,66 @@ class FirewallaBoxTemperatureSensor(FirewallaBoxBaseSensor):
         # Get temperature from stats if available
         stats = box.get("stats", {})
         self._attr_native_value = stats.get("temperature", 0)
+
+
+class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
+    """Sensor for Firewalla network flow."""
+
+    def __init__(self, coordinator, flow):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.flow_id = flow["id"]
+        
+        # Create a descriptive name based on source and destination
+        src = flow.get("src", "unknown")
+        dst = flow.get("dst", "unknown")
+        self._attr_name = f"Flow {src} to {dst}"
+        
+        self._attr_unique_id = f"{DOMAIN}_flow_{self.flow_id}"
+        self._attr_device_class = SensorDeviceClass.DATA_RATE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = UnitOfDataRate.BYTES_PER_SECOND
+        
+        # Set up device info - associate with the box if possible
+        box_id = flow.get("boxId") or flow.get("box_id")
+        if box_id:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, f"box_{box_id}")},
+                name=f"Firewalla Box {box_id}",
+                manufacturer="Firewalla",
+                model="Firewalla Box",
+            )
+        
+        self._update_attributes(flow)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "flows" not in self.coordinator.data:
+            return
+            
+        for flow in self.coordinator.data["flows"]:
+            if flow["id"] == self.flow_id:
+                self._update_attributes(flow)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, flow: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        # Use the total bytes as the state value
+        self._attr_native_value = flow.get("bytes", 0)
+        
+        # Set additional attributes
+        self._attr_extra_state_attributes = {
+            "flow_id": self.flow_id,
+            "source": flow.get("src", "unknown"),
+            "destination": flow.get("dst", "unknown"),
+            "protocol": flow.get("protocol", "unknown"),
+            "upload": flow.get("upload", 0),
+            "download": flow.get("download", 0),
+            "duration": flow.get("duration", 0),
+            "timestamp": flow.get("timestamp", ""),
+        }
 

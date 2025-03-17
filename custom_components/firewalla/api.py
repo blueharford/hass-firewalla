@@ -69,7 +69,6 @@ class FirewallaApiClient:
         method: str, 
         endpoint: str, 
         params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None
     ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
         """Make an API request."""
         url = f"{self._base_url}/{endpoint}"
@@ -88,7 +87,6 @@ class FirewallaApiClient:
                     url, 
                     headers=self._headers, 
                     params=params,
-                    json=data,
                     ssl=ssl_context
                 )
                 
@@ -152,37 +150,47 @@ class FirewallaApiClient:
         _LOGGER.error("Failed to validate credentials")
         return False
 
-    async def block_device(self, device_id: str, network_id: str) -> bool:
-        """Block a device."""
-        # Based on the API documentation, the endpoint is /devices/{deviceId}/block
-        endpoint = f"devices/{device_id}/block"
-        params = {"networkId": network_id} if network_id else None
-        
-        result = await self._api_request("POST", endpoint, params=params)
-        return result is not None
-
-    async def unblock_device(self, device_id: str, network_id: str) -> bool:
-        """Unblock a device."""
-        # Based on the API documentation, the endpoint is /devices/{deviceId}/unblock
-        endpoint = f"devices/{device_id}/unblock"
-        params = {"networkId": network_id} if network_id else None
-        
-        result = await self._api_request("POST", endpoint, params=params)
-        return result is not None
-
     async def get_boxes(self) -> List[Dict[str, Any]]:
         """Get all Firewalla boxes."""
         try:
             # Get the boxes from the API
             boxes = await self._api_request("GET", "boxes")
-            
-            if not boxes or not isinstance(boxes, list):
+        
+            if not boxes:
                 _LOGGER.error("No boxes found or invalid response")
                 return []
             
-            _LOGGER.debug("Retrieved a total of %s boxes", len(boxes))
-            return boxes
+            # Check if boxes is a list
+            if not isinstance(boxes, list):
+                _LOGGER.error("Boxes response is not a list: %s", boxes)
+                # If it's a dict with a data field, try to use that
+                if isinstance(boxes, dict) and "data" in boxes:
+                    boxes = boxes["data"]
+                    if not isinstance(boxes, list):
+                        _LOGGER.error("Boxes data is not a list: %s", boxes)
+                        return []
+                else:
+                    return []
+        
+            # Process boxes to ensure they have an id
+            processed_boxes = []
+            for box in boxes:
+                if isinstance(box, dict):
+                    # If box doesn't have an id but has a uuid, use that as id
+                    if "id" not in box and "uuid" in box:
+                        box["id"] = box["uuid"]
+                    # If box doesn't have an id but has a name, use that as id
+                    elif "id" not in box and "name" in box:
+                        box["id"] = f"box_{box['name']}"
+                    # If box still doesn't have an id, generate one
+                    elif "id" not in box:
+                        box["id"] = f"box_{len(processed_boxes)}"
                 
+                    processed_boxes.append(box)
+        
+            _LOGGER.debug("Retrieved a total of %s boxes", len(processed_boxes))
+            return processed_boxes
+            
         except Exception as exc:
             _LOGGER.error("Error getting boxes: %s", exc)
             return []
@@ -192,32 +200,192 @@ class FirewallaApiClient:
         try:
             # Based on the API documentation, get the devices
             devices = await self._api_request("GET", "devices")
-            
-            if not devices or not isinstance(devices, list):
+        
+            if not devices:
                 _LOGGER.error("No devices found or invalid response")
                 return []
             
+            # Check if devices is a list
+            if not isinstance(devices, list):
+                _LOGGER.error("Devices response is not a list: %s", devices)
+                # If it's a dict with a data field, try to use that
+                if isinstance(devices, dict) and "data" in devices:
+                    devices = devices["data"]
+                    if not isinstance(devices, list):
+                        _LOGGER.error("Devices data is not a list: %s", devices)
+                        return []
+                else:
+                    return []
+        
             # Process the devices
+            processed_devices = []
             for device in devices:
-                # Ensure online status is properly set
-                if "online" not in device:
-                    # If online status is not explicitly set, determine from lastActiveTimestamp
-                    last_active = device.get("lastActiveTimestamp")
-                    if last_active:
-                        # Consider device offline if last active more than 5 minutes ago
-                        now = datetime.now().timestamp() * 1000
-                        device["online"] = (now - last_active) < (5 * 60 * 1000)
-                    else:
-                        device["online"] = False
+                if isinstance(device, dict):
+                    # If device doesn't have an id but has a mac, use that as id
+                    if "id" not in device and "mac" in device:
+                        device["id"] = device["mac"]
+                    # If device doesn't have an id but has an ip, use that as id
+                    elif "id" not in device and "ip" in device:
+                        device["id"] = device["ip"]
+                    # If device still doesn't have an id, generate one
+                    elif "id" not in device:
+                        device["id"] = f"device_{len(processed_devices)}"
                 
-                # Ensure networkId is set
-                if "networkId" not in device:
-                    device["networkId"] = "default"
+                    # Ensure online status is properly set
+                    if "online" not in device:
+                        # If online status is not explicitly set, determine from lastActiveTimestamp
+                        last_active = device.get("lastActiveTimestamp")
+                        if last_active:
+                            # Consider device offline if last active more than 5 minutes ago
+                            now = datetime.now().timestamp() * 1000
+                            device["online"] = (now - last_active) < (5 * 60 * 1000)
+                        else:
+                            device["online"] = False
+                
+                    # Ensure networkId is set
+                    if "networkId" not in device:
+                        device["networkId"] = "default"
+                
+                    processed_devices.append(device)
+        
+            _LOGGER.debug("Retrieved a total of %s devices", len(processed_devices))
+            return processed_devices
             
-            _LOGGER.debug("Retrieved a total of %s devices", len(devices))
-            return devices
-                
         except Exception as exc:
             _LOGGER.error("Error getting devices: %s", exc)
+            return []
+
+    async def get_rules(self) -> List[Dict[str, Any]]:
+        """Get all rules."""
+        try:
+            # Get the rules from the API
+            rules = await self._api_request("GET", "rules")
+        
+            if not rules:
+                _LOGGER.error("No rules found or invalid response")
+                return []
+            
+            # Check if rules is a list
+            if not isinstance(rules, list):
+                _LOGGER.error("Rules response is not a list: %s", rules)
+                # If it's a dict with a data field, try to use that
+                if isinstance(rules, dict) and "data" in rules:
+                    rules = rules["data"]
+                    if not isinstance(rules, list):
+                        _LOGGER.error("Rules data is not a list: %s", rules)
+                        return []
+                else:
+                    return []
+        
+            # Process rules to ensure they have an id
+            processed_rules = []
+            for rule in rules:
+                if isinstance(rule, dict):
+                    # If rule doesn't have an id but has a uuid, use that as id
+                    if "id" not in rule and "uuid" in rule:
+                        rule["id"] = rule["uuid"]
+                    # If rule doesn't have an id but has a name, use that as id
+                    elif "id" not in rule and "name" in rule:
+                        rule["id"] = f"rule_{rule['name']}"
+                    # If rule still doesn't have an id, generate one
+                    elif "id" not in rule:
+                        rule["id"] = f"rule_{len(processed_rules)}"
+                
+                    processed_rules.append(rule)
+        
+            _LOGGER.debug("Retrieved a total of %s rules", len(processed_rules))
+            return processed_rules
+            
+        except Exception as exc:
+            _LOGGER.error("Error getting rules: %s", exc)
+            return []
+
+    async def get_alarms(self) -> List[Dict[str, Any]]:
+        """Get all alarms."""
+        try:
+            # Get the alarms from the API
+            alarms = await self._api_request("GET", "alarms")
+        
+            if not alarms:
+                _LOGGER.error("No alarms found or invalid response")
+                return []
+            
+            # Check if alarms is a list
+            if not isinstance(alarms, list):
+                _LOGGER.error("Alarms response is not a list: %s", alarms)
+                # If it's a dict with a data field, try to use that
+                if isinstance(alarms, dict) and "data" in alarms:
+                    alarms = alarms["data"]
+                    if not isinstance(alarms, list):
+                        _LOGGER.error("Alarms data is not a list: %s", alarms)
+                        return []
+                else:
+                    return []
+        
+            # Process alarms to ensure they have an id
+            processed_alarms = []
+            for alarm in alarms:
+                if isinstance(alarm, dict):
+                    # If alarm doesn't have an id but has a uuid, use that as id
+                    if "id" not in alarm and "uuid" in alarm:
+                        alarm["id"] = alarm["uuid"]
+                    # If alarm doesn't have an id but has a type, use that as id
+                    elif "id" not in alarm and "type" in alarm:
+                        alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
+                    # If alarm still doesn't have an id, generate one
+                    elif "id" not in alarm:
+                        alarm["id"] = f"alarm_{len(processed_alarms)}"
+                
+                    processed_alarms.append(alarm)
+        
+            _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
+            return processed_alarms
+            
+        except Exception as exc:
+            _LOGGER.error("Error getting alarms: %s", exc)
+            return []
+
+    async def get_flows(self) -> List[Dict[str, Any]]:
+        """Get all flows."""
+        try:
+            # Get the flows from the API
+            flows = await self._api_request("GET", "flows")
+        
+            if not flows:
+                _LOGGER.error("No flows found or invalid response")
+                return []
+            
+            # Check if flows is a list
+            if not isinstance(flows, list):
+                _LOGGER.error("Flows response is not a list: %s", flows)
+                # If it's a dict with a data field, try to use that
+                if isinstance(flows, dict) and "data" in flows:
+                    flows = flows["data"]
+                    if not isinstance(flows, list):
+                        _LOGGER.error("Flows data is not a list: %s", flows)
+                        return []
+                else:
+                    return []
+        
+            # Process flows to ensure they have an id
+            processed_flows = []
+            for flow in flows:
+                if isinstance(flow, dict):
+                    # If flow doesn't have an id but has a uuid, use that as id
+                    if "id" not in flow and "uuid" in flow:
+                        flow["id"] = flow["uuid"]
+                    # If flow doesn't have an id, generate one based on source and destination
+                    elif "id" not in flow:
+                        src = flow.get("src", "unknown")
+                        dst = flow.get("dst", "unknown")
+                        flow["id"] = f"flow_{src}_{dst}_{len(processed_flows)}"
+                
+                    processed_flows.append(flow)
+        
+            _LOGGER.debug("Retrieved a total of %s flows", len(processed_flows))
+            return processed_flows
+            
+        except Exception as exc:
+            _LOGGER.error("Error getting flows: %s", exc)
             return []
 
