@@ -234,11 +234,16 @@ class FirewallaApiClient:
 
     async def _ensure_authenticated(self) -> bool:
         """Ensure the client is authenticated."""
-        if not self._access_token or (
-            self._token_expires_at and datetime.now() >= self._token_expires_at
-        ):
-            _LOGGER.debug("Token expired or not set, re-authenticating")
+        # If we don't have a token or it's expired, re-authenticate
+        if not self._access_token:
+            _LOGGER.debug("No access token, authenticating")
             return await self.authenticate()
+        
+        # Check if token is expired
+        if self._token_expires_at and datetime.now() >= self._token_expires_at:
+            _LOGGER.debug("Token expired, re-authenticating")
+            return await self.authenticate()
+        
         return True
 
     async def _api_request(
@@ -249,6 +254,11 @@ class FirewallaApiClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
         """Make an API request."""
+        # Ensure we're authenticated before making the request
+        if not await self._ensure_authenticated():
+            _LOGGER.error("Failed to authenticate before making API request")
+            return None
+        
         url = f"{self._base_url}/{endpoint}"
         _LOGGER.debug("%s request to %s", method, url)
         
@@ -276,7 +286,28 @@ class FirewallaApiClient:
                     if "<html" in response_text:
                         _LOGGER.error("Received HTML response instead of JSON. URL: %s", url)
                         return None
-                
+            
+                # Handle 401 Unauthorized errors
+                if response.status == 401:
+                    response_text = await response.text()
+                    _LOGGER.error("Unauthorized error from Firewalla API: %s", response_text)
+                    
+                    # Check if token is expired
+                    try:
+                        error_data = json.loads(response_text)
+                        if error_data.get("reason") == "expired":
+                            _LOGGER.info("Token expired, attempting to re-authenticate")
+                            # Force token expiration
+                            self._token_expires_at = datetime.now() - timedelta(seconds=1)
+                            # Re-authenticate
+                            if await self.authenticate():
+                                # Retry the request with the new token
+                                return await self._api_request(method, endpoint, params, data)
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    
+                    return None
+            
                 if response.status != 200:
                     response_text = await response.text()
                     _LOGGER.error(
@@ -307,18 +338,23 @@ class FirewallaApiClient:
 
     async def async_check_credentials(self) -> bool:
         """Check if credentials are valid."""
-        # Based on the API documentation, try to get the user info
+        # Make sure we're authenticated first
+        if not await self._ensure_authenticated():
+            _LOGGER.error("Failed to authenticate during credential check")
+            return False
+        
+        # Try the user endpoint first
         result = await self._api_request("GET", "user")
         if result:
-            _LOGGER.info("Credential check successful")
+            _LOGGER.info("Credential check successful with user endpoint")
             return True
-        
-        # If that fails, try to get the devices
+    
+        # If that fails, try the devices endpoint
         result = await self._api_request("GET", "devices")
         if result:
             _LOGGER.info("Credential check successful with devices endpoint")
             return True
-        
+    
         # If all attempts fail, return failure
         _LOGGER.error("Failed to validate credentials")
         return False

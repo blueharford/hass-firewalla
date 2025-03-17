@@ -15,6 +15,7 @@ CONF_SCAN_INTERVAL: Final = "scan_interval"
 
 # Default values
 DEFAULT_SUBDOMAIN: Final = "api"
+DEFAULT_API_URL: Final = "https://api.firewalla.net/v2"
 DEFAULT_SCAN_INTERVAL: Final = 300  # 5 minutes
 
 # Data storage keys
@@ -22,12 +23,7 @@ COORDINATOR: Final = "coordinator"
 API_CLIENT: Final = "client"
 
 # API constants
-DEFAULT_API_URL: Final = "https://api.firewalla.io/api/1.0"
 DEFAULT_TIMEOUT: Final = 30
-API_LOGIN_ENDPOINT: Final = "/users/login"
-API_ORGS_ENDPOINT: Final = "/orgs"
-API_NETWORKS_ENDPOINT: Final = "/networks"
-API_DEVICES_ENDPOINT: Final = "/devices"
 
 # Entity attributes
 ATTR_DEVICE_ID: Final = "device_id"
