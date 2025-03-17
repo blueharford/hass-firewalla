@@ -34,6 +34,7 @@ CONFIG_SCHEMA = vol.Schema(
             {
                 vol.Required(CONF_API_TOKEN): cv.string,
                 vol.Optional(CONF_SUBDOMAIN, default=DEFAULT_SUBDOMAIN): cv.string,
+                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
             }
         )
     },
@@ -69,6 +70,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await client.authenticate():
         raise ConfigEntryNotReady("Failed to authenticate with Firewalla API")
     
+    # Get scan interval from options or data with fallback to default
+    scan_interval = entry.options.get(
+        CONF_SCAN_INTERVAL, 
+        entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    )
+    
     # Create update coordinator
     async def async_update_data():
         """Fetch data from API."""
@@ -76,26 +83,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Get data from all endpoints
             boxes = await client.get_boxes()
             devices = await client.get_devices()
-            rules = await client.get_rules()
-            alarms = await client.get_alarms()
-            flows = await client.get_flows()
             
-            return {
+            # Try to get rules, alarms, and flows, but don't fail if they're not available
+            try:
+                rules = await client.get_rules()
+            except Exception as e:
+                _LOGGER.warning("Failed to get rules: %s", e)
+                rules = []
+                
+            try:
+                alarms = await client.get_alarms()
+            except Exception as e:
+                _LOGGER.warning("Failed to get alarms: %s", e)
+                alarms = []
+                
+            try:
+                flows = await client.get_flows()
+            except Exception as e:
+                _LOGGER.warning("Failed to get flows: %s", e)
+                flows = []
+            
+            # If we have existing data, merge it with new data to ensure we don't lose information
+            if hasattr(async_update_data, "last_data") and async_update_data.last_data:
+                # For boxes and devices, update existing entries with new data
+                if not boxes and "boxes" in async_update_data.last_data:
+                    boxes = async_update_data.last_data["boxes"]
+                
+                if not devices and "devices" in async_update_data.last_data:
+                    devices = async_update_data.last_data["devices"]
+                
+                if not rules and "rules" in async_update_data.last_data:
+                    rules = async_update_data.last_data["rules"]
+                
+                if not alarms and "alarms" in async_update_data.last_data:
+                    alarms = async_update_data.last_data["alarms"]
+                
+                if not flows and "flows" in async_update_data.last_data:
+                    flows = async_update_data.last_data["flows"]
+            
+            # Store the data for future updates
+            data = {
                 "boxes": boxes,
                 "devices": devices,
                 "rules": rules,
                 "alarms": alarms,
                 "flows": flows
             }
+            async_update_data.last_data = data
+            
+            return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
 
+    # Initialize the last_data attribute
+    async_update_data.last_data = None
+    
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name=f"{DOMAIN}_{entry.entry_id}",
         update_method=async_update_data,
-        update_interval=timedelta(seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
+        update_interval=timedelta(seconds=scan_interval),
     )
     
     # Fetch initial data
@@ -229,5 +277,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     """Update options."""
+    # Update the scan interval in the coordinator
+    coordinator = hass.data[DOMAIN][entry.entry_id].get(COORDINATOR)
+    if coordinator:
+        scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        coordinator.update_interval = timedelta(seconds=scan_interval)
+        
+    # Reload the config entry to apply changes
     await hass.config_entries.async_reload(entry.entry_id)
 

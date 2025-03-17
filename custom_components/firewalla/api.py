@@ -116,6 +116,12 @@ class FirewallaApiClient:
                 try:
                     result = await response.json()
                     _LOGGER.debug("API request successful")
+                    
+                    # Handle different response formats
+                    if isinstance(result, dict) and "data" in result:
+                        # Some endpoints return data in a "data" field
+                        return result["data"]
+                    
                     return result
                 except aiohttp.ContentTypeError:
                     response_text = await response.text()
@@ -170,6 +176,7 @@ class FirewallaApiClient:
                         _LOGGER.error("Boxes data is not a list: %s", boxes)
                         return []
                 else:
+                    # Return empty list if we can't parse the response
                     return []
         
             # Process boxes to ensure they have an id
@@ -215,6 +222,7 @@ class FirewallaApiClient:
                         _LOGGER.error("Devices data is not a list: %s", devices)
                         return []
                 else:
+                    # Return empty list if we can't parse the response
                     return []
         
             # Process the devices
@@ -262,19 +270,20 @@ class FirewallaApiClient:
             rules = await self._api_request("GET", "rules")
         
             if not rules:
-                _LOGGER.error("No rules found or invalid response")
+                _LOGGER.warning("No rules found or endpoint not available")
                 return []
             
             # Check if rules is a list
             if not isinstance(rules, list):
-                _LOGGER.error("Rules response is not a list: %s", rules)
+                _LOGGER.warning("Rules response is not a list: %s", rules)
                 # If it's a dict with a data field, try to use that
                 if isinstance(rules, dict) and "data" in rules:
                     rules = rules["data"]
                     if not isinstance(rules, list):
-                        _LOGGER.error("Rules data is not a list: %s", rules)
+                        _LOGGER.warning("Rules data is not a list: %s", rules)
                         return []
                 else:
+                    # Return empty list if we can't parse the response
                     return []
         
             # Process rules to ensure they have an id
@@ -297,7 +306,7 @@ class FirewallaApiClient:
             return processed_rules
             
         except Exception as exc:
-            _LOGGER.error("Error getting rules: %s", exc)
+            _LOGGER.warning("Error getting rules (endpoint may not be available): %s", exc)
             return []
 
     async def get_alarms(self) -> List[Dict[str, Any]]:
@@ -307,19 +316,20 @@ class FirewallaApiClient:
             alarms = await self._api_request("GET", "alarms")
         
             if not alarms:
-                _LOGGER.error("No alarms found or invalid response")
+                _LOGGER.warning("No alarms found or endpoint not available")
                 return []
             
             # Check if alarms is a list
             if not isinstance(alarms, list):
-                _LOGGER.error("Alarms response is not a list: %s", alarms)
+                _LOGGER.warning("Alarms response is not a list: %s", alarms)
                 # If it's a dict with a data field, try to use that
                 if isinstance(alarms, dict) and "data" in alarms:
                     alarms = alarms["data"]
                     if not isinstance(alarms, list):
-                        _LOGGER.error("Alarms data is not a list: %s", alarms)
+                        _LOGGER.warning("Alarms data is not a list: %s", alarms)
                         return []
                 else:
+                    # Return empty list if we can't parse the response
                     return []
         
             # Process alarms to ensure they have an id
@@ -342,7 +352,7 @@ class FirewallaApiClient:
             return processed_alarms
             
         except Exception as exc:
-            _LOGGER.error("Error getting alarms: %s", exc)
+            _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
             return []
 
     async def get_flows(self) -> List[Dict[str, Any]]:
@@ -352,19 +362,20 @@ class FirewallaApiClient:
             flows = await self._api_request("GET", "flows")
         
             if not flows:
-                _LOGGER.error("No flows found or invalid response")
+                _LOGGER.warning("No flows found or endpoint not available")
                 return []
             
             # Check if flows is a list
             if not isinstance(flows, list):
-                _LOGGER.error("Flows response is not a list: %s", flows)
+                _LOGGER.warning("Flows response is not a list: %s", flows)
                 # If it's a dict with a data field, try to use that
                 if isinstance(flows, dict) and "data" in flows:
                     flows = flows["data"]
                     if not isinstance(flows, list):
-                        _LOGGER.error("Flows data is not a list: %s", flows)
+                        _LOGGER.warning("Flows data is not a list: %s", flows)
                         return []
                 else:
+                    # Return empty list if we can't parse the response
                     return []
         
             # Process flows to ensure they have an id
@@ -386,6 +397,6 @@ class FirewallaApiClient:
             return processed_flows
             
         except Exception as exc:
-            _LOGGER.error("Error getting flows: %s", exc)
+            _LOGGER.warning("Error getting flows (endpoint may not be available): %s", exc)
             return []
 
