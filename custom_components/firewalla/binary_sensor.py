@@ -133,8 +133,6 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         if "mac" in device:
             self._attr_extra_state_attributes["mac_address"] = device["mac"]
         elif self.device_id.startswith("mac:"):
-              = device["mac"]
-        elif self.device_id.startswith("mac:"):
             self._attr_extra_state_attributes["mac_address"] = self.device_id[4:]
         
         # Add network name from the nested network object
