@@ -6,7 +6,6 @@ This integration allows you to monitor and control your Firewalla devices from H
 
 - Monitor device status and connections
 - View network flows and statistics
-- Enable/disable firewall rules
 - Get alerts for security events
 
 ## Installation
