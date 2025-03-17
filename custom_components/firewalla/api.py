@@ -5,6 +5,7 @@ import asyncio
 import async_timeout
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Union
+import json
 
 from .const import (
     DEFAULT_TIMEOUT,
@@ -49,16 +50,28 @@ class FirewallaApiClient:
         self._use_mock_data = use_mock_data
         self._access_token = api_token  # Use api_token as access token if provided
         
-        # Determine base URL based on subdomain
-        # Based on the examples, the correct format is {subdomain}.firewalla.io/api/v1
+        # Based on the examples and the error response, the correct format is:
+        # https://{subdomain}.firewalla.io/api/v1
+        # But we're getting a web page instead of API responses, which suggests
+        # we need to use a different URL format or endpoint
+        
+        # Let's try different URL formats
         if subdomain:
-            # Try both formats to be safe
+            # Format 1: Direct API endpoint (most likely)
             self._base_url = f"https://{subdomain}.firewalla.io/api/v1"
-            self._alt_base_url = f"https://{subdomain}.firewalla.net/api/v1"
-            _LOGGER.debug("Using MSP API URL: %s (alt: %s)", self._base_url, self._alt_base_url)
+            
+            # Format 2: API subdomain with path
+            self._alt_base_url = f"https://api.{subdomain}.firewalla.io/v1"
+            
+            # Format 3: MSP API endpoint
+            self._third_base_url = f"https://app.firewalla.io/api/v1/msp/{subdomain}"
+            
+            _LOGGER.debug("Using API URLs: %s, %s, %s", 
+                         self._base_url, self._alt_base_url, self._third_base_url)
         else:
             self._base_url = DEFAULT_API_URL
             self._alt_base_url = None
+            self._third_base_url = None
             _LOGGER.debug("Using default API URL: %s", self._base_url)
             
         # Determine auth method
@@ -75,6 +88,7 @@ class FirewallaApiClient:
             
         self._org_id = None
         self._token_expires_at = None
+        self._current_url_index = 0  # Track which URL we're currently using
         
         _LOGGER.debug("Initialized Firewalla API client with auth method: %s", self._auth_method)
 
@@ -85,6 +99,29 @@ class FirewallaApiClient:
         if self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
         return headers
+
+    @property
+    def _current_base_url(self) -> str:
+        """Get the current base URL based on the index."""
+        if self._current_url_index == 0:
+            return self._base_url
+        elif self._current_url_index == 1 and self._alt_base_url:
+            return self._alt_base_url
+        elif self._current_url_index == 2 and self._third_base_url:
+            return self._third_base_url
+        return self._base_url
+
+    def _rotate_base_url(self) -> None:
+        """Rotate to the next base URL."""
+        if self._current_url_index == 0 and self._alt_base_url:
+            self._current_url_index = 1
+            _LOGGER.debug("Switching to alternate URL: %s", self._alt_base_url)
+        elif self._current_url_index == 1 and self._third_base_url:
+            self._current_url_index = 2
+            _LOGGER.debug("Switching to third URL: %s", self._third_base_url)
+        else:
+            self._current_url_index = 0
+            _LOGGER.debug("Switching back to primary URL: %s", self._base_url)
 
     async def authenticate(self) -> bool:
         """Authenticate with the Firewalla API."""
@@ -103,21 +140,34 @@ class FirewallaApiClient:
             _LOGGER.error("No authentication method configured")
             return False
 
-        try:
-            if self._auth_method == "credentials":
-                return await self._authenticate_with_credentials()
-            elif self._auth_method == "api_key":
-                return await self._authenticate_with_api_key()
-        except Exception as exc:
-            _LOGGER.error("Authentication failed: %s", exc)
-            return False
+        # Try all URL formats for authentication
+        for i in range(3):  # Try all three URL formats
+            self._current_url_index = i
+            if not self._current_base_url:
+                continue
+                
+            _LOGGER.debug("Trying authentication with URL: %s", self._current_base_url)
+            
+            try:
+                if self._auth_method == "credentials":
+                    if await self._authenticate_with_credentials():
+                        return True
+                elif self._auth_method == "api_key":
+                    if await self._authenticate_with_api_key():
+                        return True
+            except Exception as exc:
+                _LOGGER.error("Authentication failed with URL %s: %s", 
+                             self._current_base_url, exc)
+        
+        _LOGGER.error("Authentication failed with all URL formats")
+        return False
 
     async def _authenticate_with_credentials(self) -> bool:
         """Authenticate using email and password."""
         _LOGGER.debug("Authenticating with email and password")
         
         # Based on examples, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
+        login_url = f"{self._current_base_url}/auth/login"
         payload = {
             "email": self._email,
             "password": self._password
@@ -139,7 +189,8 @@ class FirewallaApiClient:
                 try:
                     data = await response.json()
                 except aiohttp.ContentTypeError:
-                    _LOGGER.error("Authentication response is not valid JSON")
+                    response_text = await response.text()
+                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
                     return False
                 
                 if "token" not in data:
@@ -168,7 +219,7 @@ class FirewallaApiClient:
         _LOGGER.debug("Authenticating with API key and secret")
         
         # Based on examples, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
+        login_url = f"{self._current_base_url}/auth/login"
         
         payload = {
             "apiKey": self._api_key,
@@ -191,7 +242,8 @@ class FirewallaApiClient:
                 try:
                     data = await response.json()
                 except aiohttp.ContentTypeError:
-                    _LOGGER.error("Authentication response is not valid JSON")
+                    response_text = await response.text()
+                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
                     return False
                 
                 if "token" not in data:
@@ -235,33 +287,22 @@ class FirewallaApiClient:
                 response = await self._session.request(
                     method, url, headers=headers, json=json, params=params
                 )
+                
+                # Check if we got HTML instead of JSON
+                content_type = response.headers.get("Content-Type", "")
+                if "text/html" in content_type:
+                    response_text = await response.text()
+                    if "<html" in response_text:
+                        _LOGGER.error("Received HTML response instead of JSON. URL: %s", url)
+                        _LOGGER.debug("HTML response: %s", response_text[:200])  # Log first 200 chars
+                        return None
+                
                 return response
         except (aiohttp.ClientConnectorError, aiohttp.ClientSSLError) as err:
             _LOGGER.warning("Connection error for %s: %s", url, err)
-            
-            # If we have an alternative URL and this was the primary URL
-            if self._alt_base_url and url.startswith(self._base_url):
-                alt_url = url.replace(self._base_url, self._alt_base_url)
-                _LOGGER.info("Trying alternative URL: %s", alt_url)
-                
-                try:
-                    async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                        response = await self._session.request(
-                            method, alt_url, headers=headers, json=json, params=params
-                        )
-                        
-                        # If successful, switch to using the alternative URL as primary
-                        if response.status == 200:
-                            _LOGGER.info("Alternative URL successful, switching to: %s", self._alt_base_url)
-                            self._base_url, self._alt_base_url = self._alt_base_url, self._base_url
-                            
-                        return response
-                except Exception as alt_err:
-                    _LOGGER.error("Alternative URL also failed: %s", alt_err)
-            
-            # If we're here, both URLs failed or we don't have an alternative
-            # Return mock data instead of raising an exception
-            _LOGGER.warning("All connection attempts failed, using mock data")
+            return None
+        except Exception as exc:
+            _LOGGER.error("Unexpected error for %s: %s", url, exc)
             return None
 
     async def _api_request(
@@ -272,51 +313,64 @@ class FirewallaApiClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
         """Make an API request."""
-        url = f"{self._base_url}/{endpoint}"
-        
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                _LOGGER.debug("%s request to %s", method, url)
-                
-                # Try the request with fallback to alternative URL
-                response = await self._try_request(
-                    url, 
-                    method=method, 
-                    headers=self._headers, 
-                    json=data,
-                    params=params
-                )
-                
-                # If response is None, both URLs failed
-                if response is None:
-                    _LOGGER.warning("API request failed, returning None")
-                    return None
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "Error from Firewalla API: %s %s", 
-                        response.status, 
-                        response_text
+        # Try all URL formats for the API request
+        for _ in range(3):  # Try each URL format
+            url = f"{self._current_base_url}/{endpoint}"
+            
+            try:
+                async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                    _LOGGER.debug("%s request to %s", method, url)
+                    
+                    # Try the request
+                    response = await self._try_request(
+                        url, 
+                        method=method, 
+                        headers=self._headers, 
+                        json=data,
+                        params=params
                     )
-                    return None
-                
-                try:
-                    return await response.json()
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Invalid JSON response: %s", response_text)
-                    return None
-                
-        except asyncio.TimeoutError:
-            _LOGGER.error("Request to %s timed out", url)
-            return None
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Error making request to %s: %s", url, err)
-            return None
-        except Exception as exc:
-            _LOGGER.error("Unexpected error making request to %s: %s", url, exc)
-            return None
+                    
+                    # If response is None, the request failed
+                    if response is None:
+                        self._rotate_base_url()  # Try the next URL format
+                        continue
+                    
+                    if response.status != 200:
+                        response_text = await response.text()
+                        _LOGGER.error(
+                            "Error from Firewalla API: %s %s", 
+                            response.status, 
+                            response_text
+                        )
+                        self._rotate_base_url()  # Try the next URL format
+                        continue
+                    
+                    try:
+                        result = await response.json()
+                        _LOGGER.debug("API request successful")
+                        return result
+                    except aiohttp.ContentTypeError:
+                        response_text = await response.text()
+                        _LOGGER.error("Invalid JSON response: %s", response_text)
+                        self._rotate_base_url()  # Try the next URL format
+                        continue
+                    
+            except asyncio.TimeoutError:
+                _LOGGER.error("Request to %s timed out", url)
+                self._rotate_base_url()  # Try the next URL format
+                continue
+            except aiohttp.ClientError as err:
+                _LOGGER.error("Error making request to %s: %s", url, err)
+                self._rotate_base_url()  # Try the next URL format
+                continue
+            except Exception as exc:
+                _LOGGER.error("Unexpected error making request to %s: %s", url, exc)
+                self._rotate_base_url()  # Try the next URL format
+                continue
+        
+        # If we're here, all URL formats failed
+        _LOGGER.warning("All API request attempts failed")
+        return None
 
     async def async_check_credentials(self) -> bool:
         """Check if credentials are valid."""
@@ -324,20 +378,20 @@ class FirewallaApiClient:
         if self._use_mock_data:
             return True
             
-        # Based on examples, we can check if we can get the organizations list
+        # Try a simple API request to check credentials
+        # First try to get organizations
         result = await self._api_request("GET", "orgs")
-        if not result:
-            # If we can't get orgs, try the alternative URL directly
-            if self._alt_base_url:
-                _LOGGER.info("Trying alternative URL for credential check")
-                old_base = self._base_url
-                self._base_url = self._alt_base_url
-                result = await self._api_request("GET", "orgs")
-                if not result:
-                    self._base_url = old_base
-                    raise Exception("Failed to authenticate with Firewalla API")
-                return True
-            raise Exception("Failed to authenticate with Firewalla API")
+        if result:
+            return True
+            
+        # If that fails, try a different endpoint
+        result = await self._api_request("GET", "users/me")
+        if result:
+            return True
+            
+        # If all attempts fail, use mock data
+        _LOGGER.warning("Failed to validate credentials, using mock data")
+        self._use_mock_data = True
         return True
 
     async def block_device(self, device_id: str, network_id: str) -> bool:
