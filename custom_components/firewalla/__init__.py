@@ -66,20 +66,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         """Fetch data from API."""
         try:
             async with async_timeout.timeout(30):
-                # Get all the data we need for the platforms
-                devices = await api_client.async_get_devices()
-                flows = await api_client.async_get_flows()
-                alarms = await api_client.async_get_alarms()
-                rules = await api_client.async_get_rules()
+                data = {}
                 
-                return {
-                    "devices": devices,
-                    "flows": flows,
-                    "alarms": alarms,
-                    "rules": rules,
-                }
+                # Try to get devices
+                devices = await api_client.async_get_devices()
+                if devices is not None:
+                    data["devices"] = devices
+                else:
+                    _LOGGER.warning("Failed to get devices from Firewalla API")
+                    data["devices"] = []
+                
+                # Try to get flows
+                flows = await api_client.async_get_flows()
+                if flows is not None:
+                    data["flows"] = flows
+                else:
+                    _LOGGER.warning("Failed to get flows from Firewalla API")
+                    data["flows"] = []
+                
+                # Try to get alarms
+                alarms = await api_client.async_get_alarms()
+                if alarms is not None:
+                    data["alarms"] = alarms
+                else:
+                    _LOGGER.warning("Failed to get alarms from Firewalla API")
+                    data["alarms"] = []
+                
+                # Try to get rules
+                rules = await api_client.async_get_rules()
+                if rules is not None:
+                    data["rules"] = rules
+                else:
+                    _LOGGER.warning("Failed to get rules from Firewalla API")
+                    data["rules"] = []
+                
+                # Check if we got any data
+                if not data or all(len(v) == 0 for v in data.values()):
+                    _LOGGER.error("Failed to get any data from Firewalla API")
+                    # Return empty data structure instead of failing
+                    return {
+                        "devices": [],
+                        "flows": [],
+                        "alarms": [],
+                        "rules": [],
+                    }
+                
+                return data
+                
         except Exception as err:
-            raise UpdateFailed(f"Error communicating with API: {err}")
+            _LOGGER.error("Error communicating with API: %s", err)
+            # Return empty data structure instead of failing
+            return {
+                "devices": [],
+                "flows": [],
+                "alarms": [],
+                "rules": [],
+            }
     
     coordinator = DataUpdateCoordinator(
         hass,
@@ -120,4 +162,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         hass.data[DOMAIN].pop(entry.entry_id)
     
     return unload_ok
-
