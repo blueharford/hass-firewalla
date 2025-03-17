@@ -265,141 +265,144 @@ class FirewallaApiClient:
 
     async def get_rules(self) -> List[Dict[str, Any]]:
         """Get all rules."""
+        rules = []
         try:
             # Get the rules from the API
             rules_response = await self._api_request("GET", "rules")
-        
+            
             if not rules_response:
                 _LOGGER.warning("No rules found or endpoint not available")
                 return []
-        
-        # Check if the response is a dictionary with a 'results' key
-        if isinstance(rules_response, dict) and "results" in rules_response:
-            rules = rules_response["results"]
-            _LOGGER.debug("Extracted rules from 'results' key")
-        else:
-            rules = rules_response
-        
-        # Check if rules is a list
-        if not isinstance(rules, list):
-            _LOGGER.warning("Rules data is not a list: %s", rules)
-            return []
-    
-        # Process rules to ensure they have an id
-        processed_rules = []
-        for rule in rules:
-            if isinstance(rule, dict):
-                # If rule doesn't have an id but has a uuid, use that as id
-                if "id" not in rule and "uuid" in rule:
-                    rule["id"] = rule["uuid"]
-                # If rule doesn't have an id but has a name, use that as id
-                elif "id" not in rule and "name" in rule:
-                    rule["id"] = f"rule_{rule['name']}"
-                # If rule still doesn't have an id, generate one
-                elif "id" not in rule:
-                    rule["id"] = f"rule_{len(processed_rules)}"
+                
+            # Check if the response is a dictionary with a 'results' key
+            if isinstance(rules_response, dict) and "results" in rules_response:
+                rules = rules_response["results"]
+                _LOGGER.debug("Extracted rules from 'results' key")
+            else:
+                rules = rules_response
+                
+            # Check if rules is a list
+            if not isinstance(rules, list):
+                _LOGGER.warning("Rules data is not a list: %s", rules)
+                return []
+                
+            # Process rules to ensure they have an id
+            processed_rules = []
+            for rule in rules:
+                if isinstance(rule, dict):
+                    # If rule doesn't have an id but has a uuid, use that as id
+                    if "id" not in rule and "uuid" in rule:
+                        rule["id"] = rule["uuid"]
+                    # If rule doesn't have an id but has a name, use that as id
+                    elif "id" not in rule and "name" in rule:
+                        rule["id"] = f"rule_{rule['name']}"
+                    # If rule still doesn't have an id, generate one
+                    elif "id" not in rule:
+                        rule["id"] = f"rule_{len(processed_rules)}"
+                    
+                    processed_rules.append(rule)
             
-                processed_rules.append(rule)
-        
-        _LOGGER.debug("Retrieved a total of %s rules", len(processed_rules))
-        return processed_rules
-        
-    except Exception as exc:
-        _LOGGER.warning("Error getting rules (endpoint may not be available): %s", exc)
-        return []
+            _LOGGER.debug("Retrieved a total of %s rules", len(processed_rules))
+            return processed_rules
+            
+        except Exception as exc:
+            _LOGGER.warning("Error getting rules (endpoint may not be available): %s", exc)
+            return []
 
     async def get_alarms(self) -> List[Dict[str, Any]]:
         """Get all alarms."""
+        alarms = []
         try:
             # Get the alarms from the API
             alarms_response = await self._api_request("GET", "alarms")
-        
+            
             if not alarms_response:
                 _LOGGER.warning("No alarms found or endpoint not available")
                 return []
-        
-        # Check if the response is a dictionary with a 'results' key
-        if isinstance(alarms_response, dict) and "results" in alarms_response:
-            alarms = alarms_response["results"]
-            _LOGGER.debug("Extracted alarms from 'results' key")
-        else:
-            alarms = alarms_response
-        
-        # Check if alarms is a list
-        if not isinstance(alarms, list):
-            _LOGGER.warning("Alarms data is not a list: %s", alarms)
-            return []
-    
-        # Process alarms to ensure they have an id
-        processed_alarms = []
-        for alarm in alarms:
-            if isinstance(alarm, dict):
-                # If alarm doesn't have an id but has a uuid, use that as id
-                if "id" not in alarm and "uuid" in alarm:
-                    alarm["id"] = alarm["uuid"]
-                # If alarm doesn't have an id but has aid, use that as id
-                elif "id" not in alarm and "aid" in alarm:
-                    alarm["id"] = f"alarm_{alarm['aid']}"
-                # If alarm doesn't have an id but has a type, use that as id
-                elif "id" not in alarm and "type" in alarm:
-                    alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
-                # If alarm still doesn't have an id, generate one
-                elif "id" not in alarm:
-                    alarm["id"] = f"alarm_{len(processed_alarms)}"
+                
+            # Check if the response is a dictionary with a 'results' key
+            if isinstance(alarms_response, dict) and "results" in alarms_response:
+                alarms = alarms_response["results"]
+                _LOGGER.debug("Extracted alarms from 'results' key")
+            else:
+                alarms = alarms_response
+                
+            # Check if alarms is a list
+            if not isinstance(alarms, list):
+                _LOGGER.warning("Alarms data is not a list: %s", alarms)
+                return []
+                
+            # Process alarms to ensure they have an id
+            processed_alarms = []
+            for alarm in alarms:
+                if isinstance(alarm, dict):
+                    # If alarm doesn't have an id but has a uuid, use that as id
+                    if "id" not in alarm and "uuid" in alarm:
+                        alarm["id"] = alarm["uuid"]
+                    # If alarm doesn't have an id but has aid, use that as id
+                    elif "id" not in alarm and "aid" in alarm:
+                        alarm["id"] = f"alarm_{alarm['aid']}"
+                    # If alarm doesn't have an id but has a type, use that as id
+                    elif "id" not in alarm and "type" in alarm:
+                        alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
+                    # If alarm still doesn't have an id, generate one
+                    elif "id" not in alarm:
+                        alarm["id"] = f"alarm_{len(processed_alarms)}"
+                    
+                    processed_alarms.append(alarm)
             
-                processed_alarms.append(alarm)
-    
-        _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
-        return processed_alarms
-        
-    except Exception as exc:
-        _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
-        return []
+            _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
+            return processed_alarms
+            
+        except Exception as exc:
+            _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
+            return []
 
     async def get_flows(self) -> List[Dict[str, Any]]:
         """Get all flows."""
+        flows = []
         try:
             # Get the flows from the API
             flows_response = await self._api_request("GET", "flows")
-        
+            
             if not flows_response:
                 _LOGGER.warning("No flows found or endpoint not available")
                 return []
-        
-        # Check if the response is a dictionary with a 'results' key
-        if isinstance(flows_response, dict) and "results" in flows_response:
-            flows = flows_response["results"]
-            _LOGGER.debug("Extracted flows from 'results' key")
-        else:
-            flows = flows_response
-        
-        # Check if flows is a list
-        if not isinstance(flows, list):
-            _LOGGER.warning("Flows data is not a list: %s", flows)
-            return []
-    
-        # Process flows to ensure they have an id
-        processed_flows = []
-        for flow in flows:
-            if isinstance(flow, dict):
-                # If flow doesn't have an id but has a uuid, use that as id
-                if "id" not in flow and "uuid" in flow:
-                    flow["id"] = flow["uuid"]
-                # If flow doesn't have an id but has a flowId, use that as id
-                elif "id" not in flow and "flowId" in flow:
-                    flow["id"] = flow["flowId"]
-                # If flow doesn't have an id, generate one based on source and destination
-                elif "id" not in flow:
-                    src = flow.get("src", "unknown")
-                    dst = flow.get("dst", "unknown")
-                    flow["id"] = f"flow_{src}_{dst}_{len(processed_flows)}"
+                
+            # Check if the response is a dictionary with a 'results' key
+            if isinstance(flows_response, dict) and "results" in flows_response:
+                flows = flows_response["results"]
+                _LOGGER.debug("Extracted flows from 'results' key")
+            else:
+                flows = flows_response
+                
+            # Check if flows is a list
+            if not isinstance(flows, list):
+                _LOGGER.warning("Flows data is not a list: %s", flows)
+                return []
+                
+            # Process flows to ensure they have an id
+            processed_flows = []
+            for flow in flows:
+                if isinstance(flow, dict):
+                    # If flow doesn't have an id but has a uuid, use that as id
+                    if "id" not in flow and "uuid" in flow:
+                        flow["id"] = flow["uuid"]
+                    # If flow doesn't have an id but has a flowId, use that as id
+                    elif "id" not in flow and "flowId" in flow:
+                        flow["id"] = flow["flowId"]
+                    # If flow doesn't have an id, generate one based on source and destination
+                    elif "id" not in flow:
+                        src = flow.get("src", "unknown")
+                        dst = flow.get("dst", "unknown")
+                        flow["id"] = f"flow_{src}_{dst}_{len(processed_flows)}"
+                    
+                    processed_flows.append(flow)
             
-                processed_flows.append(flow)
-        
-        _LOGGER.debug("Retrieved a total of %s flows", len(processed_flows))
-        return processed_flows
-        
-    except Exception as exc:
-        _LOGGER.warning("Error getting flows (endpoint may not be available): %s", exc)
-        return []
+            _LOGGER.debug("Retrieved a total of %s flows", len(processed_flows))
+            return processed_flows
+            
+        except Exception as exc:
+            _LOGGER.warning("Error getting flows (endpoint may not be available): %s", exc)
+            return []
 
