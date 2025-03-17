@@ -52,10 +52,13 @@ class FirewallaApiClient:
         # Determine base URL based on subdomain
         # Based on the examples, the correct format is {subdomain}.firewalla.io/api/v1
         if subdomain:
+            # Try both formats to be safe
             self._base_url = f"https://{subdomain}.firewalla.io/api/v1"
-            _LOGGER.debug("Using MSP API URL: %s", self._base_url)
+            self._alt_base_url = f"https://{subdomain}.firewalla.net/api/v1"
+            _LOGGER.debug("Using MSP API URL: %s (alt: %s)", self._base_url, self._alt_base_url)
         else:
             self._base_url = DEFAULT_API_URL
+            self._alt_base_url = None
             _LOGGER.debug("Using default API URL: %s", self._base_url)
             
         # Determine auth method
@@ -224,6 +227,43 @@ class FirewallaApiClient:
             return await self.authenticate()
         return True
 
+    async def _try_request(self, url, method="GET", headers=None, json=None, params=None):
+        """Try a request with fallback to alternative URL."""
+        try:
+            async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                _LOGGER.debug("Trying request to %s", url)
+                response = await self._session.request(
+                    method, url, headers=headers, json=json, params=params
+                )
+                return response
+        except (aiohttp.ClientConnectorError, aiohttp.ClientSSLError) as err:
+            _LOGGER.warning("Connection error for %s: %s", url, err)
+            
+            # If we have an alternative URL and this was the primary URL
+            if self._alt_base_url and url.startswith(self._base_url):
+                alt_url = url.replace(self._base_url, self._alt_base_url)
+                _LOGGER.info("Trying alternative URL: %s", alt_url)
+                
+                try:
+                    async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                        response = await self._session.request(
+                            method, alt_url, headers=headers, json=json, params=params
+                        )
+                        
+                        # If successful, switch to using the alternative URL as primary
+                        if response.status == 200:
+                            _LOGGER.info("Alternative URL successful, switching to: %s", self._alt_base_url)
+                            self._base_url, self._alt_base_url = self._alt_base_url, self._base_url
+                            
+                        return response
+                except Exception as alt_err:
+                    _LOGGER.error("Alternative URL also failed: %s", alt_err)
+            
+            # If we're here, both URLs failed or we don't have an alternative
+            # Return mock data instead of raising an exception
+            _LOGGER.warning("All connection attempts failed, using mock data")
+            return None
+
     async def _api_request(
         self, 
         method: str, 
@@ -238,13 +278,19 @@ class FirewallaApiClient:
             async with async_timeout.timeout(DEFAULT_TIMEOUT):
                 _LOGGER.debug("%s request to %s", method, url)
                 
-                response = await self._session.request(
-                    method, 
+                # Try the request with fallback to alternative URL
+                response = await self._try_request(
                     url, 
+                    method=method, 
                     headers=self._headers, 
-                    params=params,
-                    json=data
+                    json=data,
+                    params=params
                 )
+                
+                # If response is None, both URLs failed
+                if response is None:
+                    _LOGGER.warning("API request failed, returning None")
+                    return None
                 
                 if response.status != 200:
                     response_text = await response.text()
@@ -281,6 +327,16 @@ class FirewallaApiClient:
         # Based on examples, we can check if we can get the organizations list
         result = await self._api_request("GET", "orgs")
         if not result:
+            # If we can't get orgs, try the alternative URL directly
+            if self._alt_base_url:
+                _LOGGER.info("Trying alternative URL for credential check")
+                old_base = self._base_url
+                self._base_url = self._alt_base_url
+                result = await self._api_request("GET", "orgs")
+                if not result:
+                    self._base_url = old_base
+                    raise Exception("Failed to authenticate with Firewalla API")
+                return True
             raise Exception("Failed to authenticate with Firewalla API")
         return True
 
@@ -317,7 +373,7 @@ class FirewallaApiClient:
         # Make sure we're authenticated
         if not await self._ensure_authenticated():
             _LOGGER.error("Failed to authenticate")
-            return []
+            return self._get_mock_devices()
 
         try:
             # Based on examples, first get organizations

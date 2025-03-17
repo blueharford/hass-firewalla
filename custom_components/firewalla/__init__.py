@@ -32,6 +32,7 @@ from .const import (
     CONF_API_KEY,
     CONF_API_SECRET,
     CONF_USE_MOCK_DATA,
+    PLATFORMS,
 )
 from .api import FirewallaApiClient
 
@@ -48,8 +49,6 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
-
-PLATFORMS = ["sensor", "switch", "binary_sensor"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
