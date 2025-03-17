@@ -4,29 +4,99 @@ import aiohttp
 import asyncio
 import async_timeout
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from .const import (
+    DEFAULT_TIMEOUT,
+    DEFAULT_API_URL,
+    API_LOGIN_ENDPOINT,
+    API_ORGS_ENDPOINT,
+    API_NETWORKS_ENDPOINT,
+    API_DEVICES_ENDPOINT,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_API_KEY,
+    CONF_API_SECRET,
+    CONF_API_TOKEN,
+    CONF_SUBDOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-DEFAULT_TIMEOUT = 10
-API_DEVICES_ENDPOINT = "/devices"
 
 
 class FirewallaApiClient:
     """Firewalla API client."""
 
-    def __init__(self, api_token, subdomain, session):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        email: Optional[str] = None,
+        password: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        api_token: Optional[str] = None,
+        subdomain: Optional[str] = None,
+        use_mock_data: bool = False,
+    ) -> None:
         """Initialize the API client."""
+        self._session = session
+        self._email = email
+        self._password = password
+        self._api_key = api_key
+        self._api_secret = api_secret
         self._api_token = api_token
         self._subdomain = subdomain
-        self._session = session
-        self._headers = {
-            "Authorization": f"Bearer {self._api_token}",
-            "Content-Type": "application/json",
-        }
-        self._base_url = f"https://{self._subdomain}.firewalla.net/api"
-        self._access_token = api_token  # Assuming api_token is the access token
-        self._use_mock_data = False # Added mock data flag
+        self._use_mock_data = use_mock_data
+        self._access_token = api_token  # Use api_token as access token if provided
+        
+        # Determine base URL based on subdomain
+        if subdomain:
+            self._base_url = f"https://{subdomain}.firewalla.io/api/1.0"
+        else:
+            self._base_url = DEFAULT_API_URL
+            
+        # Determine auth method
+        if email and password:
+            self._auth_method = "credentials"
+        elif api_key and api_secret:
+            self._auth_method = "api_key"
+        elif api_token:
+            self._auth_method = "token"
+            # If using token directly, we're already authenticated
+            self._access_token = api_token
+        else:
+            self._auth_method = None
+            
+        self._org_id = None
+        self._token_expires_at = None
+        
+        _LOGGER.debug("Initialized Firewalla API client with auth method: %s", self._auth_method)
+
+    async def authenticate(self) -> bool:
+        """Authenticate with the Firewalla API."""
+        if self._use_mock_data:
+            _LOGGER.debug("Using mock data, skipping authentication")
+            self._access_token = "mock_token"
+            self._token_expires_at = datetime.now() + timedelta(hours=1)
+            return True
+
+        # If we're using a direct token, we're already authenticated
+        if self._auth_method == "token" and self._access_token:
+            _LOGGER.debug("Using provided API token, skipping authentication")
+            return True
+
+        if not self._auth_method:
+            _LOGGER.error("No authentication method configured")
+            return False
+
+        try:
+            if self._auth_method == "credentials":
+                return await self._authenticate_with_credentials()
+            elif self._auth_method == "api_key":
+                return await self._authenticate_with_api_key()
+        except Exception as exc:
+            _LOGGER.error("Authentication failed: %s", exc)
+            return False
 
     async def _api_request(self, method, endpoint, data=None):
         """Make an API request."""

@@ -70,6 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         password=entry.data.get(CONF_PASSWORD),
         api_key=entry.data.get(CONF_API_KEY),
         api_secret=entry.data.get(CONF_API_SECRET),
+        api_token=entry.data.get(CONF_API_TOKEN),
         subdomain=entry.data.get(CONF_SUBDOMAIN),
         use_mock_data=entry.data.get(CONF_USE_MOCK_DATA, False),
     )

@@ -16,7 +16,7 @@ This integration allows you to monitor and control your Firewalla devices from H
 1. Make sure you have [HACS](https://hacs.xyz/) installed
 2. Go to HACS > Integrations
 3. Click the three dots in the top right corner and select "Custom repositories"
-4. Add this repository URL: `https://github.com/blurharford/hass-firewalla`
+4. Add this repository URL: `https://github.com/blueharford/hass-firewalla`
 5. Select "Integration" as the category
 6. Click "ADD"
 7. Search for "Firewalla" and install it
@@ -33,7 +33,7 @@ This integration allows you to monitor and control your Firewalla devices from H
 1. Go to Home Assistant > Settings > Devices & Services
 2. Click "Add Integration"
 3. Search for "Firewalla" and select it
-4. Enter your Firewalla subdomain (e.g., subdomain)
+4. Enter your Firewalla subdomain
    - This is the unique subdomain for your MSP account (the part before .firewalla.net)
 5. Enter your Firewalla API token
    - To get your API token, go to your Firewalla MSP account > Account Settings > Create New Token
