@@ -3,7 +3,7 @@
       "step": {
         "user": {
           "title": "Connect to Firewalla",
-          "description": "Set up Firewalla integration. You need to create a personal access token in your Firewalla MSP account. Make sure to enter your correct subdomain (the part before .firewalla.net).\n\n{error_info}",
+          "description": "Set up Firewalla integration. You need to create a personal access token in your Firewalla MSP account.",
           "data": {
             "subdomain": "Firewalla Subdomain (e.g., dn-jeyeek)",
             "api_token": "API Token"
@@ -11,11 +11,12 @@
         }
       },
       "error": {
-        "auth": "Authentication failed. Please check your subdomain and API token. Make sure the API is accessible."
+        "auth": "Authentication failed. Please check your subdomain and API token."
       },
       "abort": {
         "already_configured": "This Firewalla instance is already configured"
       }
     }
   }
+  
   
