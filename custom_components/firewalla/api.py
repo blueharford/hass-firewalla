@@ -316,44 +316,44 @@ class FirewallaApiClient:
             # Get the alarms from the API
             alarms_response = await self._api_request("GET", "alarms")
         
-        if not alarms_response:
-            _LOGGER.warning("No alarms found or endpoint not available")
-            return []
+            if not alarms_response:
+                _LOGGER.warning("No alarms found or endpoint not available")
+                return []
             
-        # Check if the response is a dictionary with a 'results' key
-        if isinstance(alarms_response, dict) and "results" in alarms_response:
-            alarms = alarms_response["results"]
-            _LOGGER.debug("Extracted alarms from 'results' key")
-        else:
-            alarms = alarms_response
+            # Check if the response is a dictionary with a 'results' key
+            if isinstance(alarms_response, dict) and "results" in alarms_response:
+                alarms = alarms_response["results"]
+                _LOGGER.debug("Extracted alarms from 'results' key")
+            else:
+                alarms = alarms_response
             
-        # Check if alarms is a list
-        if not isinstance(alarms, list):
-            _LOGGER.warning("Alarms data is not a list: %s", alarms)
-            return []
+            # Check if alarms is a list
+            if not isinstance(alarms, list):
+                _LOGGER.warning("Alarms data is not a list: %s", alarms)
+                return []
             
-        # Process alarms to ensure they have an id
-        processed_alarms = []
-        for alarm in alarms:
-            if isinstance(alarm, dict):
-                # If alarm doesn't have an id but has aid, use that as id
-                if "id" not in alarm and "aid" in alarm:
-                    alarm["id"] = f"alarm_{alarm['aid']}"
-                # If alarm doesn't have an id but has a type, use that as id
-                elif "id" not in alarm and "type" in alarm:
-                    alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
-                # If alarm still doesn't have an id, generate one
-                elif "id" not in alarm:
-                    alarm["id"] = f"alarm_{len(processed_alarms)}"
+            # Process alarms to ensure they have an id
+            processed_alarms = []
+            for alarm in alarms:
+                if isinstance(alarm, dict):
+                    # If alarm doesn't have an id but has aid, use that as id
+                    if "id" not in alarm and "aid" in alarm:
+                        alarm["id"] = f"alarm_{alarm['aid']}"
+                    # If alarm doesn't have an id but has a type, use that as id
+                    elif "id" not in alarm and "type" in alarm:
+                        alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
+                    # If alarm still doesn't have an id, generate one
+                    elif "id" not in alarm:
+                        alarm["id"] = f"alarm_{len(processed_alarms)}"
                 
                 processed_alarms.append(alarm)
         
-        _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
-        return processed_alarms
+            _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
+            return processed_alarms
         
-    except Exception as exc:
-        _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
-        return []
+        except Exception as exc:
+            _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
+            return []
 
     async def get_flows(self) -> List[Dict[str, Any]]:
         """Get all flows."""
