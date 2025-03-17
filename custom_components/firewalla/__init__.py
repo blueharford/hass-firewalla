@@ -226,7 +226,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Process alarms
         alarms = coordinator.data.get("alarms", []) if coordinator.data else []
-        
+
         # Process alarms with more robust error handling
         alarm_dict = {}
         for alarm in alarms:
@@ -236,8 +236,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if alarm_id:
                     alarm_dict[alarm_id] = alarm
                 else:
-                    _LOGGER.warning("Found alarm without id: %s", alarm)
-        
+                    # Generate an ID based on aid or type
+                    if "aid" in alarm:
+                        alarm_id = f"alarm_{alarm['aid']}"
+                    elif "type" in alarm:
+                        alarm_id = f"alarm_{alarm['type']}_{len(alarm_dict)}"
+                    else:
+                        alarm_id = f"alarm_{len(alarm_dict)}"
+                    
+                    alarm["id"] = alarm_id
+                    alarm_dict[alarm_id] = alarm
+
         hass.data[DOMAIN][entry.entry_id]["alarms"] = alarm_dict
         _LOGGER.debug("Found %s alarms from Firewalla", len(alarm_dict))
         
@@ -253,7 +262,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if flow_id:
                     flow_dict[flow_id] = flow
                 else:
-                    _LOGGER.warning("Found flow without id: %s", flow)
+                    # Generate a unique ID for the flow
+                    src_id = flow.get("source", {}).get("id", "unknown")
+                    dst_id = flow.get("destination", {}).get("id", "unknown")
+                    ts = flow.get("ts", "")
+                    flow_id = f"flow_{src_id}_{dst_id}_{ts}"
+                    flow["id"] = flow_id
+                    flow_dict[flow_id] = flow
         
         hass.data[DOMAIN][entry.entry_id]["flows"] = flow_dict
         _LOGGER.debug("Found %s flows from Firewalla", len(flow_dict))

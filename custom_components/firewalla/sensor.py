@@ -296,7 +296,6 @@ class FirewallaIpReservationSensor(FirewallaBaseSensor):
     
     @callback
     def _update_attributes(self, device: Dict[str, Any]) -> None:
-        """Update the entity attributes."""  device: Dict[str, Any]) -> None:
         """Update the entity attributes."""
         super()._update_attributes(device)
         
