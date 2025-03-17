@@ -40,6 +40,12 @@ async def async_setup_entry(
     
     entities = []
     
+    # Debug log to check if we have flow data
+    if coordinator.data and "flows" in coordinator.data:
+        _LOGGER.debug("Found %s flows in coordinator data", len(coordinator.data["flows"]))
+    else:
+        _LOGGER.debug("No flows found in coordinator data")
+    
     # Create a mapping of device IDs to their flow sensors
     device_flows = {}
     
@@ -47,6 +53,9 @@ async def async_setup_entry(
     if coordinator.data and "flows" in coordinator.data:
         for flow in coordinator.data["flows"]:
             if isinstance(flow, dict) and "id" in flow:
+                # Log the flow data for debugging
+                _LOGGER.debug("Processing flow: %s", flow)
+                
                 # Determine which device this flow belongs to
                 device_id = None
                 
@@ -54,28 +63,41 @@ async def async_setup_entry(
                 if "device" in flow and isinstance(flow["device"], dict):
                     if "id" in flow["device"]:
                         device_id = flow["device"]["id"]
+                        _LOGGER.debug("Flow has device ID: %s", device_id)
                     elif "mac" in flow["device"]:
                         device_id = flow["device"]["mac"]
+                        _LOGGER.debug("Flow has device MAC: %s", device_id)
                 
                 # If not, try to use the source device
                 if not device_id and "source" in flow and isinstance(flow["source"], dict):
                     if "id" in flow["source"]:
                         device_id = flow["source"]["id"]
+                        _LOGGER.debug("Flow has source ID: %s", device_id)
                     elif "mac" in flow["source"]:
                         device_id = flow["source"]["mac"]
+                        _LOGGER.debug("Flow has source MAC: %s", device_id)
                 
                 if device_id:
                     if device_id not in device_flows:
                         device_flows[device_id] = []
                     device_flows[device_id].append(flow)
+                    _LOGGER.debug("Added flow to device %s", device_id)
+                else:
+                    _LOGGER.debug("Could not determine device ID for flow: %s", flow["id"])
             else:
                 _LOGGER.warning("Skipping flow without id: %s", flow)
+    
+    # Log the device-flow mapping
+    _LOGGER.debug("Device-flow mapping: %s", {k: len(v) for k, v in device_flows.items()})
     
     # Add sensors for each device
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
             if isinstance(device, dict) and "id" in device:
                 device_id = device["id"]
+                device_mac = device.get("mac", "")
+                
+                _LOGGER.debug("Processing device: %s (MAC: %s)", device_id, device_mac)
                 
                 # Add MAC address sensor (which is often the id)
                 entities.append(FirewallaMacAddressSensor(coordinator, device))
@@ -110,15 +132,17 @@ async def async_setup_entry(
                 
                 # Add flow sensors for this device
                 if device_id in device_flows:
+                    _LOGGER.debug("Adding %s flows for device %s", len(device_flows[device_id]), device_id)
                     for flow in device_flows[device_id]:
                         entities.append(FirewallaFlowSensor(coordinator, flow, device))
+                else:
+                    _LOGGER.debug("No flows found for device ID: %s", device_id)
                 
                 # Also check if this device's MAC address matches any flow device
-                if "mac" in device:
-                    device_mac = device["mac"]
-                    if device_mac in device_flows:
-                        for flow in device_flows[device_mac]:
-                            entities.append(FirewallaFlowSensor(coordinator, flow, device))
+                if device_mac and device_mac in device_flows:
+                    _LOGGER.debug("Adding %s flows for device MAC %s", len(device_flows[device_mac]), device_mac)
+                    for flow in device_flows[device_mac]:
+                        entities.append(FirewallaFlowSensor(coordinator, flow, device))
             else:
                 _LOGGER.warning("Skipping device without id: %s", device)
     
@@ -132,21 +156,30 @@ async def async_setup_entry(
             else:
                 _LOGGER.warning("Skipping box without id: %s", box)
     
-    # Add any remaining flow sensors that couldn't be associated with a device
-    processed_flow_ids = set()
-    
-    # First, collect all flow IDs that have already been processed
-    for device_id, flows in device_flows.items():
-        for flow in flows:
-            processed_flow_ids.add(flow["id"])
-    
-    # Then add any remaining flows
+    # Create standalone flow sensors for any flows that weren't associated with a device
     if coordinator.data and "flows" in coordinator.data:
+        standalone_flows = 0
         for flow in coordinator.data["flows"]:
-            if isinstance(flow, dict) and "id" in flow and flow["id"] not in processed_flow_ids:
-                # Create a standalone flow sensor
-                entities.append(FirewallaFlowSensor(coordinator, flow, None))
+            if isinstance(flow, dict) and "id" in flow:
+                # Check if this flow was already added to a device
+                flow_id = flow["id"]
+                device_id = None
+                
+                # Check if this flow is associated with a device
+                is_associated = False
+                for d_id, flows in device_flows.items():
+                    if any(f["id"] == flow_id for f in flows):
+                        is_associated = True
+                        break
+                
+                # If not associated, create a standalone flow sensor
+                if not is_associated:
+                    standalone_flows += 1
+                    entities.append(FirewallaFlowSensor(coordinator, flow, None))
+        
+        _LOGGER.debug("Created %s standalone flow sensors", standalone_flows)
     
+    _LOGGER.debug("Adding a total of %s entities", len(entities))
     async_add_entities(entities)
 
 
@@ -605,6 +638,19 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
                 )
         
         self._update_attributes(flow)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "flows" not in self.coordinator.data:
+            return
+            
+        for flow in self.coordinator.data["flows"]:
+            if flow["id"] == self.flow_id:
+                self._update_attributes(flow)
+                break
+                
+        self.async_write_ha_state()
     
     @callback
     def _update_attributes(self, flow: Dict[str, Any]) -> None:

@@ -99,6 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 
             try:
                 flows = await client.get_flows()
+                _LOGGER.debug("Successfully retrieved %s flows", len(flows))
             except Exception as e:
                 _LOGGER.warning("Failed to get flows: %s", e)
                 flows = []
@@ -252,6 +253,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Process flows
         flows = coordinator.data.get("flows", []) if coordinator.data else []
+        
+        # Log the raw flows data for debugging
+        _LOGGER.debug("Raw flows data: %s", flows)
         
         # Process flows with more robust error handling
         flow_dict = {}
