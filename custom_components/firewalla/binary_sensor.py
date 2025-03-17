@@ -158,25 +158,25 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
                 # Convert from milliseconds to seconds
                 last_active_dt = datetime.fromtimestamp(last_active / 1000)
                 self._attr_extra_state_attributes["last_seen"] = last_active_dt.isoformat()
-            
+                
                 # Calculate time since last seen
                 now = datetime.now()
                 time_diff = now - last_active_dt
                 self._attr_extra_state_attributes["last_seen_seconds_ago"] = time_diff.total_seconds()
-            
+                
                 # Add human-readable format
-                if time_diff.total_seconds() < 60:
-                    time_str = f"{int(time_diff.total_seconds())} seconds ago"
-                elif time_diff.total_seconds() < 3600:
-                    time_str = f"{int(time_diff.total_seconds() / 60)} minutes ago"
-                elif time_diff.total_seconds() < 86400:
-                    time_str = f"{int(time_diff.total_seconds() / 3600)} hours ago"
+                seconds = time_diff.total_seconds()
+                if seconds < 60:
+                    time_str = f"{int(seconds)} seconds ago"
+                elif seconds < 3600:
+                    time_str = f"{int(seconds / 60)} minutes ago"
+                elif seconds < 86400:
+                    time_str = f"{int(seconds / 3600)} hours ago"
                 else:
-                    time_str = f"{int(time_diff.total_seconds() / 86400)} days ago"
+                    time_str = f"{int(seconds / 86400)} days ago"
                 self._attr_extra_state_attributes["last_seen_friendly"] = time_str
-            
-        except (ValueError, TypeError):
-            pass
+            except (ValueError, TypeError) as e:
+                _LOGGER.debug("Error processing last seen timestamp: %s", e)
 
 
 class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):
@@ -241,18 +241,18 @@ class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):
                 self._attr_extra_state_attributes["last_seen_seconds_ago"] = time_diff.total_seconds()
                 
                 # Add human-readable format
-                if time_diff.total_seconds() < 60:
-                    time_str = f"{int(time_diff.total_seconds())} seconds ago"
-                elif time_diff.total_seconds() < 3600:
-                    time_str = f"{int(time_diff.total_seconds() / 60)} minutes ago"
-                elif time_diff.total_seconds() < 86400:
-                    time_str = f"{int(time_diff.total_seconds() / 3600)} hours ago"
+                seconds = time_diff.total_seconds()
+                if seconds < 60:
+                    time_str = f"{int(seconds)} seconds ago"
+                elif seconds < 3600:
+                    time_str = f"{int(seconds / 60)} minutes ago"
+                elif seconds < 86400:
+                    time_str = f"{int(seconds / 3600)} hours ago"
                 else:
-                    time_str = f"{int(time_diff.total_seconds() / 86400)} days ago"
+                    time_str = f"{int(seconds / 86400)} days ago"
                 self._attr_extra_state_attributes["last_seen_friendly"] = time_str
-                
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                _LOGGER.debug("Error processing last seen timestamp: %s", e)
 
 
 class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
