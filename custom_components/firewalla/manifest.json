@@ -1,0 +1,14 @@
+{
+    "domain": "firewalla",
+    "name": "Firewalla",
+    "config_flow": true,
+    "documentation": "https://github.com/blueharford/hass-firewalla",
+    "issue_tracker": "https://github.com/blueharford/hass-firewalla/issues",
+    "requirements": [],
+    "dependencies": [],
+    "codeowners": ["@blueharford"],
+    "iot_class": "cloud_polling",
+    "version": "0.1.0"
+  }
+  
+  

@@ -1,0 +1,10 @@
+{
+    "name": "Firewalla",
+    "render_readme": true,
+    "domain": "firewalla",
+    "documentation": "https://github.com/blueharford/hass-firewalla",
+    "issue_tracker": "https://github.com/blueharford/hass-firewalla/issues",
+    "homeassistant": "2023.1.0"
+  }
+  
+  
