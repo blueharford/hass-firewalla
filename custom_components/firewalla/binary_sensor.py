@@ -130,32 +130,40 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         # Add network name
         if "networkName" in device:
             self._attr_extra_state_attributes["network_name"] = device["networkName"]
+        elif "network_name" in device:
+            self._attr_extra_state_attributes["network_name"] = device["network_name"]
         
         # Add group name if available
         if "groupName" in device:
             self._attr_extra_state_attributes["group_name"] = device["groupName"]
+        elif "group_name" in device:
+            self._attr_extra_state_attributes["group_name"] = device["group_name"]
         
         # Add IP reservation status
         if "ipReservation" in device:
             self._attr_extra_state_attributes["ip_reserved"] = device["ipReservation"]
+        elif "ip_reservation" in device:
+            self._attr_extra_state_attributes["ip_reserved"] = device["ip_reservation"]
         
         # Add MAC vendor information
         if "macVendor" in device:
             self._attr_extra_state_attributes["mac_vendor"] = device["macVendor"]
+        elif "mac_vendor" in device:
+            self._attr_extra_state_attributes["mac_vendor"] = device["mac_vendor"]
         
         # Add last seen timestamp if available
-        last_active = device.get("lastActiveTimestamp")
+        last_active = device.get("lastActiveTimestamp") or device.get("last_active_timestamp")
         if last_active:
             try:
                 # Convert from milliseconds to seconds
                 last_active_dt = datetime.fromtimestamp(last_active / 1000)
                 self._attr_extra_state_attributes["last_seen"] = last_active_dt.isoformat()
-                
+            
                 # Calculate time since last seen
                 now = datetime.now()
                 time_diff = now - last_active_dt
                 self._attr_extra_state_attributes["last_seen_seconds_ago"] = time_diff.total_seconds()
-                
+            
                 # Add human-readable format
                 if time_diff.total_seconds() < 60:
                     time_str = f"{int(time_diff.total_seconds())} seconds ago"
@@ -166,9 +174,9 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
                 else:
                     time_str = f"{int(time_diff.total_seconds() / 86400)} days ago"
                 self._attr_extra_state_attributes["last_seen_friendly"] = time_str
-                
-            except (ValueError, TypeError):
-                pass
+            
+        except (ValueError, TypeError):
+            pass
 
 
 class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):
@@ -254,12 +262,18 @@ class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
         """Initialize the binary sensor."""
         super().__init__(coordinator)
         self.alarm_id = alarm["id"]
-        self._attr_name = f"Firewalla Alarm {alarm.get('type', 'Unknown')}"
+        
+        # Get a descriptive name for the alarm
+        alarm_type = alarm.get("type") or alarm.get("_type", "Unknown")
+        if isinstance(alarm_type, int):
+            alarm_type = f"Type {alarm_type}"
+        
+        self._attr_name = f"Firewalla Alarm {alarm_type}"
         self._attr_unique_id = f"{DOMAIN}_alarm_{self.alarm_id}"
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
         
         # Set up device info - associate with the box if possible
-        box_id = alarm.get("boxId") or alarm.get("box_id")
+        box_id = alarm.get("boxId") or alarm.get("box_id") or alarm.get("gid")
         if box_id:
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, f"box_{box_id}")},
@@ -286,21 +300,28 @@ class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
     @callback
     def _update_attributes(self, alarm: Dict[str, Any]) -> None:
         """Update the entity attributes."""
-        # Alarm is active if it's not cleared
-        self._attr_is_on = not alarm.get("cleared", False)
+        # Alarm is active if status is not 2 (cleared)
+        self._attr_is_on = alarm.get("status", 1) != 2
         
         # Set additional attributes
         self._attr_extra_state_attributes = {
             ATTR_ALARM_ID: self.alarm_id,
             "type": alarm.get("type", "Unknown"),
             "message": alarm.get("message", ""),
-            "timestamp": alarm.get("timestamp", ""),
+            "timestamp": alarm.get("ts", ""),
         }
         
         # Add device info if available
-        device_id = alarm.get("deviceId") or alarm.get("device_id")
-        if device_id:
-            self._attr_extra_state_attributes[ATTR_DEVICE_ID] = device_id
+        if "device" in alarm and isinstance(alarm["device"], dict):
+            device = alarm["device"]
+            if "id" in device:
+                self._attr_extra_state_attributes[ATTR_DEVICE_ID] = device["id"]
+            if "name" in device:
+                self._attr_extra_state_attributes["device_name"] = device["name"]
+            if "ip" in device:
+                self._attr_extra_state_attributes["device_ip"] = device["ip"]
+            if "mac" in device:
+                self._attr_extra_state_attributes["device_mac"] = device["mac"]
 
 
 class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
@@ -310,12 +331,38 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
         """Initialize the binary sensor."""
         super().__init__(coordinator)
         self.rule_id = rule["id"]
-        self._attr_name = f"Firewalla Rule {rule.get('name', 'Unknown')}"
+        
+        # Get a descriptive name for the rule
+        rule_name = rule.get("name", "")
+        if not rule_name:
+            # Try to create a descriptive name from the target
+            if "target" in rule and isinstance(rule["target"], dict):
+                target_type = rule["target"].get("type", "")
+                target_value = rule["target"].get("value", "")
+                if target_type and target_value:
+                    rule_name = f"{target_type}:{target_value}"
+                elif target_type:
+                    rule_name = target_type
+            
+            # If still no name, use the action and direction
+            if not rule_name:
+                action = rule.get("action", "")
+                direction = rule.get("direction", "")
+                if action and direction:
+                    rule_name = f"{action}_{direction}"
+                elif action:
+                    rule_name = action
+        
+        # If still no name, use the ID
+        if not rule_name:
+            rule_name = self.rule_id[:8]
+        
+        self._attr_name = f"Firewalla Rule {rule_name}"
         self._attr_unique_id = f"{DOMAIN}_rule_{self.rule_id}"
         self._attr_device_class = BinarySensorDeviceClass.RUNNING
         
         # Set up device info - associate with the box if possible
-        box_id = rule.get("boxId") or rule.get("box_id")
+        box_id = rule.get("boxId") or rule.get("box_id") or rule.get("gid")
         if box_id:
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, f"box_{box_id}")},
@@ -342,15 +389,36 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
     @callback
     def _update_attributes(self, rule: Dict[str, Any]) -> None:
         """Update the entity attributes."""
-        # Rule is active if it's enabled
-        self._attr_is_on = rule.get("enabled", False)
+        # Rule is active if status is 'active'
+        self._attr_is_on = rule.get("status") == "active"
         
         # Set additional attributes
         self._attr_extra_state_attributes = {
             ATTR_RULE_ID: self.rule_id,
-            "name": rule.get("name", "Unknown"),
-            "type": rule.get("type", "Unknown"),
-            "target": rule.get("target", ""),
-            "created_at": rule.get("createdAt", ""),
+            "action": rule.get("action", "Unknown"),
+            "direction": rule.get("direction", "Unknown"),
+            "status": rule.get("status", "Unknown"),
         }
+        
+        # Add target information if available
+        if "target" in rule and isinstance(rule["target"], dict):
+            target = rule["target"]
+            self._attr_extra_state_attributes["target_type"] = target.get("type", "")
+            if "value" in target:
+                self._attr_extra_state_attributes["target_value"] = target["value"]
+        
+        # Add scope information if available
+        if "scope" in rule and isinstance(rule["scope"], dict):
+            scope = rule["scope"]
+            self._attr_extra_state_attributes["scope_type"] = scope.get("type", "")
+            if "value" in scope:
+                self._attr_extra_state_attributes["scope_value"] = scope["value"]
+            if "port" in scope:
+                self._attr_extra_state_attributes["scope_port"] = scope["port"]
+        
+        # Add timestamp information
+        if "ts" in rule:
+            self._attr_extra_state_attributes["created_at"] = rule["ts"]
+        if "updateTs" in rule:
+            self._attr_extra_state_attributes["updated_at"] = rule["updateTs"]
 

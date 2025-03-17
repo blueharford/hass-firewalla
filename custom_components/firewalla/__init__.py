@@ -102,25 +102,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as e:
                 _LOGGER.warning("Failed to get flows: %s", e)
                 flows = []
-            
+        
             # If we have existing data, merge it with new data to ensure we don't lose information
             if hasattr(async_update_data, "last_data") and async_update_data.last_data:
                 # For boxes and devices, update existing entries with new data
                 if not boxes and "boxes" in async_update_data.last_data:
                     boxes = async_update_data.last_data["boxes"]
-                
+            
                 if not devices and "devices" in async_update_data.last_data:
                     devices = async_update_data.last_data["devices"]
-                
+            
                 if not rules and "rules" in async_update_data.last_data:
                     rules = async_update_data.last_data["rules"]
-                
+            
                 if not alarms and "alarms" in async_update_data.last_data:
                     alarms = async_update_data.last_data["alarms"]
-                
+            
                 if not flows and "flows" in async_update_data.last_data:
                     flows = async_update_data.last_data["flows"]
-            
+        
             # Store the data for future updates
             data = {
                 "boxes": boxes,
@@ -130,9 +130,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "flows": flows
             }
             async_update_data.last_data = data
-            
+        
             return data
         except Exception as err:
+            _LOGGER.error("Error communicating with API: %s", err)
+            # If we have last data, return it instead of failing
+            if hasattr(async_update_data, "last_data") and async_update_data.last_data:
+                _LOGGER.info("Using cached data due to API error")
+                return async_update_data.last_data
             raise UpdateFailed(f"Error communicating with API: {err}")
 
     # Initialize the last_data attribute
