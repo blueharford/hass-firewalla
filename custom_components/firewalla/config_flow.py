@@ -7,7 +7,17 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 
 from .api import FirewallaApiClient
-from .const import DOMAIN, CONF_API_TOKEN, CONF_SUBDOMAIN, DEFAULT_SUBDOMAIN
+from .const import (
+    DOMAIN, 
+    CONF_API_TOKEN, 
+    CONF_SUBDOMAIN, 
+    DEFAULT_SUBDOMAIN, 
+    CONF_USE_MOCK_DATA,
+    CONF_API_KEY,
+    CONF_API_SECRET,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,25 +33,37 @@ class FirewallaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             session = async_get_clientsession(self.hass)
+            
+            # Create API client with the provided credentials
             api_client = FirewallaApiClient(
-                user_input[CONF_API_TOKEN],
-                user_input[CONF_SUBDOMAIN],
-                session
+                session=session,
+                api_token=user_input.get(CONF_API_TOKEN),
+                subdomain=user_input.get(CONF_SUBDOMAIN),
+                use_mock_data=user_input.get(CONF_USE_MOCK_DATA, False),
             )
 
             try:
-                await api_client.async_check_credentials()
-            except Exception:
-                errors["base"] = "auth"
-            else:
-                # Use a combination of subdomain and token as the unique ID
-                await self.async_set_unique_id(f"{user_input[CONF_SUBDOMAIN]}_{user_input[CONF_API_TOKEN]}")
-                self._abort_if_unique_id_configured()
+                # Test the API connection
+                if user_input.get(CONF_USE_MOCK_DATA, False):
+                    # Skip authentication check if using mock data
+                    auth_success = True
+                else:
+                    auth_success = await api_client.async_check_credentials()
                 
-                return self.async_create_entry(
-                    title=f"Firewalla ({user_input[CONF_SUBDOMAIN]})",
-                    data=user_input,
-                )
+                if auth_success:
+                    # Use a combination of subdomain and token as the unique ID
+                    await self.async_set_unique_id(f"{user_input[CONF_SUBDOMAIN]}_{user_input.get(CONF_API_TOKEN, '')}")
+                    self._abort_if_unique_id_configured()
+                    
+                    return self.async_create_entry(
+                        title=f"Firewalla ({user_input[CONF_SUBDOMAIN]})",
+                        data=user_input,
+                    )
+                else:
+                    errors["base"] = "auth"
+            except Exception as ex:
+                _LOGGER.error("Error during authentication: %s", ex)
+                errors["base"] = "auth"
 
         return self.async_show_form(
             step_id="user",
@@ -49,6 +71,7 @@ class FirewallaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_SUBDOMAIN, default=DEFAULT_SUBDOMAIN): str,
                     vol.Required(CONF_API_TOKEN): str,
+                    vol.Optional(CONF_USE_MOCK_DATA, default=False): bool,
                 }
             ),
             errors=errors,
