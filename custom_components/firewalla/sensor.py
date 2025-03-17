@@ -46,6 +46,13 @@ async def async_setup_entry(
             entities.append(FirewallaDownloadSensor(coordinator, device))
             entities.append(FirewallaBlockedCountSensor(coordinator, device))
     
+    # Add sensors for each box
+    if coordinator.data and "boxes" in coordinator.data:
+        for box in coordinator.data["boxes"]:
+            entities.append(FirewallaBoxCPUSensor(coordinator, box))
+            entities.append(FirewallaBoxMemorySensor(coordinator, box))
+            entities.append(FirewallaBoxTemperatureSensor(coordinator, box))
+    
     async_add_entities(entities)
 
 
@@ -174,4 +181,131 @@ class FirewallaBlockedCountSensor(FirewallaBaseSensor):
         # Get blocked count from stats if available
         stats = device.get("stats", {})
         self._attr_native_value = stats.get("blockedCount", 0)
+
+
+class FirewallaBoxBaseSensor(CoordinatorEntity, SensorEntity):
+    """Base sensor for Firewalla box."""
+
+    def __init__(
+        self, 
+        coordinator, 
+        box,
+        suffix: str,
+        device_class: Optional[str] = None,
+        state_class: Optional[str] = None,
+        unit_of_measurement: Optional[str] = None,
+    ):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.box_id = box["id"]
+        self._attr_name = f"Firewalla Box {box.get('name', 'Unknown')} {suffix}"
+        self._attr_unique_id = f"{DOMAIN}_box_{suffix.lower().replace(' ', '_')}_{self.box_id}"
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_native_unit_of_measurement = unit_of_measurement
+        
+        # Set up device info
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"box_{self.box_id}")},
+            name=f"Firewalla Box {box.get('name', self.box_id)}",
+            manufacturer="Firewalla",
+            model=box.get("model", "Firewalla Box"),
+        )
+        
+        self._update_attributes(box)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "boxes" not in self.coordinator.data:
+            return
+            
+        for box in self.coordinator.data["boxes"]:
+            if box["id"] == self.box_id:
+                self._update_attributes(box)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, box: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        self._attr_extra_state_attributes = {
+            "box_id": self.box_id,
+            "name": box.get("name", "Unknown"),
+            "model": box.get("model", "Unknown"),
+            "version": box.get("version", "Unknown"),
+        }
+
+
+class FirewallaBoxCPUSensor(FirewallaBoxBaseSensor):
+    """Sensor for Firewalla box CPU usage."""
+
+    def __init__(self, coordinator, box):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            box,
+            "CPU Usage",
+            SensorDeviceClass.POWER_FACTOR,
+            SensorStateClass.MEASUREMENT,
+            "%",
+        )
+    
+    @callback
+    def _update_attributes(self, box: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(box)
+        
+        # Get CPU usage from stats if available
+        stats = box.get("stats", {})
+        self._attr_native_value = stats.get("cpu", 0)
+
+
+class FirewallaBoxMemorySensor(FirewallaBoxBaseSensor):
+    """Sensor for Firewalla box memory usage."""
+
+    def __init__(self, coordinator, box):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            box,
+            "Memory Usage",
+            SensorDeviceClass.POWER_FACTOR,
+            SensorStateClass.MEASUREMENT,
+            "%",
+        )
+    
+    @callback
+    def _update_attributes(self, box: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(box)
+        
+        # Get memory usage from stats if available
+        stats = box.get("stats", {})
+        self._attr_native_value = stats.get("memory", 0)
+
+
+class FirewallaBoxTemperatureSensor(FirewallaBoxBaseSensor):
+    """Sensor for Firewalla box temperature."""
+
+    def __init__(self, coordinator, box):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            box,
+            "Temperature",
+            SensorDeviceClass.TEMPERATURE,
+            SensorStateClass.MEASUREMENT,
+            "°C",
+        )
+    
+    @callback
+    def _update_attributes(self, box: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(box)
+        
+        # Get temperature from stats if available
+        stats = box.get("stats", {})
+        self._attr_native_value = stats.get("temperature", 0)
 

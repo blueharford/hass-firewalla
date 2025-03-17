@@ -5,10 +5,6 @@ DOMAIN: Final = "firewalla"
 PLATFORMS: Final = ["binary_sensor", "sensor", "switch"]
 
 # Configuration constants
-CONF_EMAIL: Final = "email"
-CONF_PASSWORD: Final = "password"
-CONF_API_KEY: Final = "api_key"
-CONF_API_SECRET: Final = "api_secret"
 CONF_API_TOKEN: Final = "api_token"
 CONF_SUBDOMAIN: Final = "subdomain"
 CONF_SCAN_INTERVAL: Final = "scan_interval"

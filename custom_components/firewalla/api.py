@@ -3,7 +3,7 @@ import logging
 import aiohttp
 import asyncio
 import async_timeout
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 import json
 import ssl
@@ -11,10 +11,6 @@ import ssl
 from .const import (
     DEFAULT_TIMEOUT,
     DEFAULT_API_URL,
-    CONF_EMAIL,
-    CONF_PASSWORD,
-    CONF_API_KEY,
-    CONF_API_SECRET,
     CONF_API_TOKEN,
     CONF_SUBDOMAIN,
 )
@@ -28,22 +24,13 @@ class FirewallaApiClient:
     def __init__(
         self,
         session: aiohttp.ClientSession,
-        email: Optional[str] = None,
-        password: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        api_token: Optional[str] = None,
+        api_token: str,
         subdomain: Optional[str] = None,
     ) -> None:
         """Initialize the API client."""
         self._session = session
-        self._email = email
-        self._password = password
-        self._api_key = api_key
-        self._api_secret = api_secret
         self._api_token = api_token
         self._subdomain = subdomain
-        self._access_token = api_token  # Use api_token as access token if provided
         
         # Use the correct URL format based on the API documentation
         if subdomain:
@@ -53,198 +40,29 @@ class FirewallaApiClient:
             self._base_url = DEFAULT_API_URL
             _LOGGER.debug("Using default API URL: %s", self._base_url)
             
-        # Determine auth method
-        if email and password:
-            self._auth_method = "credentials"
-        elif api_key and api_secret:
-            self._auth_method = "api_key"
-        elif api_token:
-            self._auth_method = "token"
-            # If using token directly, we're already authenticated
-            self._access_token = api_token
-        else:
-            self._auth_method = None
-            
-        self._token_expires_at = None
-        
-        _LOGGER.debug("Initialized Firewalla API client with auth method: %s", self._auth_method)
+        _LOGGER.debug("Initialized Firewalla API client with token authentication")
 
     @property
     def _headers(self) -> Dict[str, str]:
         """Get the headers for API requests."""
         headers = {"Content-Type": "application/json"}
         
-        # Add authorization header if we have a token
-        if self._access_token:
-            headers["Authorization"] = f"Bearer {self._access_token}"
+        # Add authorization header with token
+        if self._api_token:
+            headers["Authorization"] = f"Token {self._api_token}"
             
         return headers
 
     async def authenticate(self) -> bool:
-        """Authenticate with the Firewalla API."""
-        # If we're using a direct token, we're already authenticated
-        if self._auth_method == "token" and self._access_token:
-            _LOGGER.debug("Using provided API token, skipping authentication")
+        """Verify authentication with the Firewalla API."""
+        # Simply check if we can access the boxes endpoint
+        result = await self._api_request("GET", "boxes")
+        if result is not None:
+            _LOGGER.info("Authentication successful with boxes endpoint")
             return True
-
-        if not self._auth_method:
-            _LOGGER.error("No authentication method configured")
-            return False
-
-        try:
-            if self._auth_method == "credentials":
-                return await self._authenticate_with_credentials()
-            elif self._auth_method == "api_key":
-                return await self._authenticate_with_api_key()
-        except Exception as exc:
-            _LOGGER.error("Authentication failed: %s", exc)
-            return False
-
-    async def _authenticate_with_credentials(self) -> bool:
-        """Authenticate using email and password."""
-        _LOGGER.debug("Authenticating with email and password")
-        
-        # Based on the API documentation, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
-        
-        payload = {
-            "email": self._email,
-            "password": self._password
-        }
-        
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                response = await self._session.post(login_url, json=payload)
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "Authentication failed with status %s: %s", 
-                        response.status, 
-                        response_text
-                    )
-                    return False
-                
-                try:
-                    data = await response.json()
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
-                    return False
-                
-                # Look for token in the response
-                token = None
-                if "token" in data:
-                    token = data["token"]
-                elif "access_token" in data:
-                    token = data["access_token"]
-                elif "accessToken" in data:
-                    token = data["accessToken"]
-                elif "data" in data and "token" in data["data"]:
-                    token = data["data"]["token"]
-                
-                if not token:
-                    _LOGGER.error("No token found in authentication response")
-                    return False
-                
-                self._access_token = token
-                # Set expiration if provided, otherwise default to 1 hour
-                if "expiresIn" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
-                elif "expires_in" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expires_in"])
-                else:
-                    self._token_expires_at = datetime.now() + timedelta(hours=1)
-                
-                _LOGGER.debug("Authentication successful")
-                return True
-        
-        except asyncio.TimeoutError:
-            _LOGGER.error("Authentication request timed out")
-            return False
-        except Exception as exc:
-            _LOGGER.error("Authentication failed: %s", exc)
-            return False
-
-    async def _authenticate_with_api_key(self) -> bool:
-        """Authenticate using API key and secret."""
-        _LOGGER.debug("Authenticating with API key and secret")
-        
-        # Based on the API documentation, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
-        
-        payload = {
-            "apiKey": self._api_key,
-            "apiSecret": self._api_secret
-        }
-        
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                response = await self._session.post(login_url, json=payload)
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "API key authentication failed with status %s: %s", 
-                        response.status, 
-                        response_text
-                    )
-                    return False
-                
-                try:
-                    data = await response.json()
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
-                    return False
-                
-                # Look for token in the response
-                token = None
-                if "token" in data:
-                    token = data["token"]
-                elif "access_token" in data:
-                    token = data["access_token"]
-                elif "accessToken" in data:
-                    token = data["accessToken"]
-                elif "data" in data and "token" in data["data"]:
-                    token = data["data"]["token"]
-                
-                if not token:
-                    _LOGGER.error("No token found in authentication response")
-                    return False
-                
-                self._access_token = token
-                # Set expiration if provided, otherwise default to 1 hour
-                if "expiresIn" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
-                elif "expires_in" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expires_in"])
-                else:
-                    self._token_expires_at = datetime.now() + timedelta(hours=1)
-                
-                _LOGGER.debug("API key authentication successful")
-                return True
-        
-        except asyncio.TimeoutError:
-            _LOGGER.error("Authentication request timed out")
-            return False
-        except Exception as exc:
-            _LOGGER.error("API key authentication failed: %s", exc)
-            return False
-
-    async def _ensure_authenticated(self) -> bool:
-        """Ensure the client is authenticated."""
-        # If we don't have a token or it's expired, re-authenticate
-        if not self._access_token:
-            _LOGGER.debug("No access token, authenticating")
-            return await self.authenticate()
-        
-        # Check if token is expired
-        if self._token_expires_at and datetime.now() >= self._token_expires_at:
-            _LOGGER.debug("Token expired, re-authenticating")
-            return await self.authenticate()
-        
-        return True
+            
+        _LOGGER.error("Failed to authenticate with Firewalla API")
+        return False
 
     async def _api_request(
         self, 
@@ -254,11 +72,6 @@ class FirewallaApiClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
         """Make an API request."""
-        # Ensure we're authenticated before making the request
-        if not await self._ensure_authenticated():
-            _LOGGER.error("Failed to authenticate before making API request")
-            return None
-        
         url = f"{self._base_url}/{endpoint}"
         _LOGGER.debug("%s request to %s", method, url)
         
@@ -291,21 +104,6 @@ class FirewallaApiClient:
                 if response.status == 401:
                     response_text = await response.text()
                     _LOGGER.error("Unauthorized error from Firewalla API: %s", response_text)
-                    
-                    # Check if token is expired
-                    try:
-                        error_data = json.loads(response_text)
-                        if error_data.get("reason") == "expired":
-                            _LOGGER.info("Token expired, attempting to re-authenticate")
-                            # Force token expiration
-                            self._token_expires_at = datetime.now() - timedelta(seconds=1)
-                            # Re-authenticate
-                            if await self.authenticate():
-                                # Retry the request with the new token
-                                return await self._api_request(method, endpoint, params, data)
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-                    
                     return None
             
                 if response.status != 200:
@@ -338,20 +136,15 @@ class FirewallaApiClient:
 
     async def async_check_credentials(self) -> bool:
         """Check if credentials are valid."""
-        # Make sure we're authenticated first
-        if not await self._ensure_authenticated():
-            _LOGGER.error("Failed to authenticate during credential check")
-            return False
-        
-        # Try the user endpoint first
-        result = await self._api_request("GET", "user")
-        if result:
-            _LOGGER.info("Credential check successful with user endpoint")
+        # Simply check if we can access the boxes endpoint
+        result = await self._api_request("GET", "boxes")
+        if result is not None:
+            _LOGGER.info("Credential check successful with boxes endpoint")
             return True
     
         # If that fails, try the devices endpoint
         result = await self._api_request("GET", "devices")
-        if result:
+        if result is not None:
             _LOGGER.info("Credential check successful with devices endpoint")
             return True
     
@@ -377,13 +170,25 @@ class FirewallaApiClient:
         result = await self._api_request("POST", endpoint, params=params)
         return result is not None
 
-    async def get_devices(self) -> List[Dict[str, Any]]:
-        """Get all devices across all networks."""
-        # Make sure we're authenticated
-        if not await self._ensure_authenticated():
-            _LOGGER.error("Failed to authenticate")
+    async def get_boxes(self) -> List[Dict[str, Any]]:
+        """Get all Firewalla boxes."""
+        try:
+            # Get the boxes from the API
+            boxes = await self._api_request("GET", "boxes")
+            
+            if not boxes or not isinstance(boxes, list):
+                _LOGGER.error("No boxes found or invalid response")
+                return []
+            
+            _LOGGER.debug("Retrieved a total of %s boxes", len(boxes))
+            return boxes
+                
+        except Exception as exc:
+            _LOGGER.error("Error getting boxes: %s", exc)
             return []
 
+    async def get_devices(self) -> List[Dict[str, Any]]:
+        """Get all devices across all networks."""
         try:
             # Based on the API documentation, get the devices
             devices = await self._api_request("GET", "devices")

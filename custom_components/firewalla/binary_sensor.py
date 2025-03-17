@@ -42,6 +42,11 @@ async def async_setup_entry(
         for device in coordinator.data["devices"]:
             entities.append(FirewallaOnlineSensor(coordinator, device))
     
+    # Add online status sensors for each box
+    if coordinator.data and "boxes" in coordinator.data:
+        for box in coordinator.data["boxes"]:
+            entities.append(FirewallaBoxOnlineSensor(coordinator, box))
+    
     async_add_entities(entities)
 
 
@@ -123,4 +128,80 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         for attr in ["ip", "mac"]:
             if attr in device:
                 self._attr_extra_state_attributes[attr] = device[attr]
+
+
+class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor for Firewalla box online status."""
+
+    def __init__(self, coordinator, box):
+        """Initialize the binary sensor."""
+        super().__init__(coordinator)
+        self.box_id = box["id"]
+        self._attr_name = f"Firewalla Box {box.get('name', 'Unknown')} Online"
+        self._attr_unique_id = f"{DOMAIN}_box_online_{self.box_id}"
+        self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+        
+        # Set up device info
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"box_{self.box_id}")},
+            name=f"Firewalla Box {box.get('name', self.box_id)}",
+            manufacturer="Firewalla",
+            model=box.get("model", "Firewalla Box"),
+        )
+        
+        self._update_attributes(box)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "boxes" not in self.coordinator.data:
+            return
+            
+        for box in self.coordinator.data["boxes"]:
+            if box["id"] == self.box_id:
+                self._update_attributes(box)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, box: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        # Explicitly check for online status
+        self._attr_is_on = box.get("online", False)
+        
+        # Set additional attributes
+        self._attr_extra_state_attributes = {
+            "box_id": self.box_id,
+            "name": box.get("name", "Unknown"),
+            "model": box.get("model", "Unknown"),
+            "version": box.get("version", "Unknown"),
+        }
+        
+        # Add last seen timestamp if available
+        last_active = box.get("lastActiveTimestamp")
+        if last_active:
+            try:
+                # Convert from milliseconds to seconds
+                last_active_dt = datetime.fromtimestamp(last_active / 1000)
+                self._attr_extra_state_attributes["last_seen"] = last_active_dt.isoformat()
+                
+                # Calculate time since last seen
+                now = datetime.now()
+                time_diff = now - last_active_dt
+                self._attr_extra_state_attributes["last_seen_seconds_ago"] = time_diff.total_seconds()
+                
+                # Add human-readable format
+                if time_diff.total_seconds() < 60:
+                    time_str = f"{int(time_diff.total_seconds())} seconds ago"
+                elif time_diff.total_seconds() < 3600:
+                    time_str = f"{int(time_diff.total_seconds() / 60)} minutes ago"
+                elif time_diff.total_seconds() < 86400:
+                    time_str = f"{int(time_diff.total_seconds() / 3600)} hours ago"
+                else:
+                    time_str = f"{int(time_diff.total_seconds() / 86400)} days ago"
+                self._attr_extra_state_attributes["last_seen_friendly"] = time_str
+                
+            except (ValueError, TypeError):
+                pass
 

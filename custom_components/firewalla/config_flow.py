@@ -11,11 +11,7 @@ from .const import (
     DOMAIN, 
     CONF_API_TOKEN, 
     CONF_SUBDOMAIN, 
-    DEFAULT_SUBDOMAIN, 
-    CONF_API_KEY,
-    CONF_API_SECRET,
-    CONF_EMAIL,
-    CONF_PASSWORD,
+    DEFAULT_SUBDOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)

@@ -1,10 +1,7 @@
 """The Firewalla integration."""
-import asyncio
 import logging
 from datetime import timedelta
 
-import aiohttp
-import async_timeout
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,13 +10,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import (
-    CONF_EMAIL,
-    CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
 )
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     DOMAIN,
@@ -29,8 +22,6 @@ from .const import (
     DEFAULT_SUBDOMAIN,
     COORDINATOR,
     API_CLIENT,
-    CONF_API_KEY,
-    CONF_API_SECRET,
     PLATFORMS,
 )
 from .api import FirewallaApiClient
@@ -70,10 +61,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     client = FirewallaApiClient(
         session=session,
-        email=entry.data.get(CONF_EMAIL),
-        password=entry.data.get(CONF_PASSWORD),
-        api_key=entry.data.get(CONF_API_KEY),
-        api_secret=entry.data.get(CONF_API_SECRET),
         api_token=entry.data.get(CONF_API_TOKEN),
         subdomain=subdomain,
     )
@@ -86,7 +73,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_update_data():
         """Fetch data from API."""
         try:
-            return {"devices": await client.get_devices()}
+            # Get both boxes and devices
+            boxes = await client.get_boxes()
+            devices = await client.get_devices()
+            
+            return {
+                "boxes": boxes,
+                "devices": devices
+            }
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
 
@@ -105,20 +99,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         API_CLIENT: client,
         COORDINATOR: coordinator,
+        "boxes": {},
         "devices": {},
     }
     
-    # Get initial devices
+    # Process initial data
     try:
-        devices = coordinator.data.get("devices", []) if coordinator.data else []
+        # Process boxes
+        boxes = coordinator.data.get("boxes", []) if coordinator.data else []
+        hass.data[DOMAIN][entry.entry_id]["boxes"] = {
+            box["id"]: box for box in boxes
+        }
+        _LOGGER.debug("Found %s Firewalla boxes", len(boxes))
         
+        # Process devices
+        devices = coordinator.data.get("devices", []) if coordinator.data else []
         hass.data[DOMAIN][entry.entry_id]["devices"] = {
             device["id"]: device for device in devices
         }
         _LOGGER.debug("Found %s devices from Firewalla", len(devices))
     except Exception as exc:
-        _LOGGER.error("Error processing initial devices: %s", exc)
-        raise ConfigEntryNotReady("Failed to process initial device data") from exc
+        _LOGGER.error("Error processing initial data: %s", exc)
+        raise ConfigEntryNotReady("Failed to process initial data") from exc
     
     # Set up platforms using the new async_forward_entry_setups method
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
