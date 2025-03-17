@@ -1,6 +1,7 @@
 """Sensor platform for Firewalla integration."""
 import logging
 from typing import Any, Dict, Optional
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -9,7 +10,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    UnitOfDataRate,
+    UnitOfInformation,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
@@ -43,9 +44,36 @@ async def async_setup_entry(
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
             if isinstance(device, dict) and "id" in device:
-                entities.append(FirewallaUploadSensor(coordinator, device))
-                entities.append(FirewallaDownloadSensor(coordinator, device))
-                entities.append(FirewallaBlockedCountSensor(coordinator, device))
+                # Add MAC address sensor (which is often the id)
+                entities.append(FirewallaMacAddressSensor(coordinator, device))
+                
+                # Add IP address sensor
+                if "ip" in device:
+                    entities.append(FirewallaIpAddressSensor(coordinator, device))
+                
+                # Add MAC vendor sensor
+                if "macVendor" in device:
+                    entities.append(FirewallaMacVendorSensor(coordinator, device))
+                
+                # Add network name sensor
+                if "network" in device and isinstance(device["network"], dict):
+                    entities.append(FirewallaNetworkNameSensor(coordinator, device))
+                
+                # Add group name sensor
+                if "group" in device and isinstance(device["group"], dict):
+                    entities.append(FirewallaGroupNameSensor(coordinator, device))
+                
+                # Add IP reservation sensor
+                if "ipReserved" in device:
+                    entities.append(FirewallaIpReservationSensor(coordinator, device))
+                
+                # Add total download sensor
+                if "totalDownload" in device:
+                    entities.append(FirewallaTotalDownloadSensor(coordinator, device))
+                
+                # Add total upload sensor
+                if "totalUpload" in device:
+                    entities.append(FirewallaTotalUploadSensor(coordinator, device))
             else:
                 _LOGGER.warning("Skipping device without id: %s", device)
     
@@ -86,6 +114,8 @@ class FirewallaBaseSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.device_id = device["id"]
         self.network_id = device.get("networkId")
+        if "network" in device and isinstance(device["network"], dict) and "id" in device["network"]:
+            self.network_id = device["network"]["id"]
         self._attr_name = f"{device.get('name', 'Unknown')} {suffix}"
         self._attr_unique_id = f"{DOMAIN}_{suffix.lower().replace(' ', '_')}_{self.device_id}"
         self._attr_device_class = device_class
@@ -123,92 +153,170 @@ class FirewallaBaseSensor(CoordinatorEntity, SensorEntity):
             ATTR_NETWORK_ID: self.network_id,
             ATTR_DEVICE_NAME: device.get("name", "Unknown"),
         }
-        
-        # Add IP address
-        if "ip" in device:
-            self._attr_extra_state_attributes["ip_address"] = device["ip"]
-        
-        # Add MAC address (which is often the id)
-        if "mac" in device:
-            self._attr_extra_state_attributes["mac_address"] = device["mac"]
-        
-        # Add network name
-        if "networkName" in device:
-            self._attr_extra_state_attributes["network_name"] = device["networkName"]
-        
-        # Add group name if available
-        if "groupName" in device:
-            self._attr_extra_state_attributes["group_name"] = device["groupName"]
-        
-        # Add IP reservation status
-        if "ipReservation" in device:
-            self._attr_extra_state_attributes["ip_reserved"] = device["ipReservation"]
-        
-        # Add MAC vendor information
-        if "macVendor" in device:
-            self._attr_extra_state_attributes["mac_vendor"] = device["macVendor"]
 
 
-class FirewallaUploadSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla device upload data rate."""
+class FirewallaMacAddressSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device MAC address."""
 
     def __init__(self, coordinator, device):
         """Initialize the sensor."""
         super().__init__(
             coordinator,
             device,
-            "Upload Rate",
-            SensorDeviceClass.DATA_RATE,
-            SensorStateClass.MEASUREMENT,
-            UnitOfDataRate.BYTES_PER_SECOND,
-        )
-    
-    @callback
-    def _update_attributes(self, device: Dict[str, Any]) -> None:
-        """Update the entity attributes."""
-        super()._update_attributes(device)
-        
-        # Get upload rate from stats if available
-        stats = device.get("stats", {})
-        self._attr_native_value = stats.get("upload", 0)
-
-
-class FirewallaDownloadSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla device download data rate."""
-
-    def __init__(self, coordinator, device):
-        """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            device,
-            "Download Rate",
-            SensorDeviceClass.DATA_RATE,
-            SensorStateClass.MEASUREMENT,
-            UnitOfDataRate.BYTES_PER_SECOND,
-        )
-    
-    @callback
-    def _update_attributes(self, device: Dict[str, Any]) -> None:
-        """Update the entity attributes."""
-        super()._update_attributes(device)
-        
-        # Get download rate from stats if available
-        stats = device.get("stats", {})
-        self._attr_native_value = stats.get("download", 0)
-
-
-class FirewallaBlockedCountSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla device blocked connections count."""
-
-    def __init__(self, coordinator, device):
-        """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            device,
-            "Blocked Count",
+            "MAC Address",
             None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # MAC address is often the device ID
+        mac = device.get("mac", self.device_id)
+        # If the ID starts with "mac:", extract just the MAC part
+        if mac.startswith("mac:"):
+            mac = mac[4:]
+        self._attr_native_value = mac
+
+
+class FirewallaIpAddressSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device IP address."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "IP Address",
+            None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get IP address
+        self._attr_native_value = device.get("ip", "Unknown")
+
+
+class FirewallaMacVendorSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device MAC vendor."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "MAC Vendor",
+            None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get MAC vendor
+        self._attr_native_value = device.get("macVendor", "Unknown")
+
+
+class FirewallaNetworkNameSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device network name."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "Network Name",
+            None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get network name from the nested network object
+        network_name = "Unknown"
+        if "network" in device and isinstance(device["network"], dict):
+            network_name = device["network"].get("name", "Unknown")
+        self._attr_native_value = network_name
+
+
+class FirewallaGroupNameSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device group name."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "Group Name",
+            None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get group name from the nested group object
+        group_name = "Unknown"
+        if "group" in device and isinstance(device["group"], dict):
+            group_name = device["group"].get("name", "Unknown")
+        self._attr_native_value = group_name
+
+
+class FirewallaIpReservationSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device IP reservation status."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "IP Reserved",
+            None,
+            None,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""  device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get IP reservation status
+        ip_reserved = device.get("ipReserved", False)
+        self._attr_native_value = "Yes" if ip_reserved else "No"
+
+
+class FirewallaTotalDownloadSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device total download."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "Total Download",
+            SensorDeviceClass.DATA_SIZE,
             SensorStateClass.TOTAL_INCREASING,
-            None,
+            UnitOfInformation.KILOBYTES,
         )
     
     @callback
@@ -216,9 +324,39 @@ class FirewallaBlockedCountSensor(FirewallaBaseSensor):
         """Update the entity attributes."""
         super()._update_attributes(device)
         
-        # Get blocked count from stats if available
-        stats = device.get("stats", {})
-        self._attr_native_value = stats.get("blockedCount", 0)
+        # Get total download directly from the device object
+        download_bytes = device.get("totalDownload", 0)
+        
+        # Convert bytes to kilobytes
+        download_kb = download_bytes / 1024 if download_bytes else 0
+        self._attr_native_value = round(download_kb, 2)
+
+
+class FirewallaTotalUploadSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device total upload."""
+
+    def __init__(self, coordinator, device):
+        """Initialize the sensor."""
+        super().__init__(
+            coordinator,
+            device,
+            "Total Upload",
+            SensorDeviceClass.DATA_SIZE,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfInformation.KILOBYTES,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get total upload directly from the device object
+        upload_bytes = device.get("totalUpload", 0)
+        
+        # Convert bytes to kilobytes
+        upload_kb = upload_bytes / 1024 if upload_bytes else 0
+        self._attr_native_value = round(upload_kb, 2)
 
 
 class FirewallaBoxBaseSensor(CoordinatorEntity, SensorEntity):
@@ -357,23 +495,34 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
         self.flow_id = flow["id"]
         
         # Create a descriptive name based on source and destination
-        src = flow.get("src", "unknown")
-        dst = flow.get("dst", "unknown")
-        self._attr_name = f"Flow {src} to {dst}"
+        src_name = "unknown"
+        dst_name = "unknown"
         
+        if "source" in flow and isinstance(flow["source"], dict):
+            src_name = flow["source"].get("name", flow["source"].get("ip", "unknown"))
+        
+        if "destination" in flow and isinstance(flow["destination"], dict):
+            dst_name = flow["destination"].get("name", flow["destination"].get("ip", "unknown"))
+        
+        self._attr_name = f"Flow {src_name} to {dst_name}"
         self._attr_unique_id = f"{DOMAIN}_flow_{self.flow_id}"
-        self._attr_device_class = SensorDeviceClass.DATA_RATE
+        self._attr_device_class = SensorDeviceClass.DATA_SIZE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfDataRate.BYTES_PER_SECOND
+        self._attr_native_unit_of_measurement = UnitOfInformation.BYTES
         
-        # Set up device info - associate with the box if possible
-        box_id = flow.get("boxId") or flow.get("box_id")
-        if box_id:
+        # Set up device info - associate with the device that generated the flow
+        device_id = None
+        if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
+            device_id = flow["device"]["id"]
+        elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
+            device_id = flow["source"]["id"]
+        
+        if device_id:
             self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, f"box_{box_id}")},
-                name=f"Firewalla Box {box_id}",
+                identifiers={(DOMAIN, device_id)},
+                name=flow.get("device", {}).get("name", f"Device {device_id}"),
                 manufacturer="Firewalla",
-                model="Firewalla Box",
+                model="Network Device",
             )
         
         self._update_attributes(flow)
@@ -394,18 +543,66 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
     @callback
     def _update_attributes(self, flow: Dict[str, Any]) -> None:
         """Update the entity attributes."""
-        # Use the total bytes as the state value
-        self._attr_native_value = flow.get("bytes", 0)
+        # Use the total bytes (download + upload) as the state value
+        download = flow.get("download", 0)
+        upload = flow.get("upload", 0)
+        self._attr_native_value = download + upload
         
         # Set additional attributes
         self._attr_extra_state_attributes = {
             "flow_id": self.flow_id,
-            "source": flow.get("src", "unknown"),
-            "destination": flow.get("dst", "unknown"),
             "protocol": flow.get("protocol", "unknown"),
-            "upload": flow.get("upload", 0),
-            "download": flow.get("download", 0),
+            "direction": flow.get("direction", "unknown"),
+            "blocked": flow.get("block", False),
+            "download": download,
+            "upload": upload,
             "duration": flow.get("duration", 0),
-            "timestamp": flow.get("timestamp", ""),
+            "category": flow.get("category", "unknown"),
+            "region": flow.get("region", "unknown"),
+            "timestamp": flow.get("ts", ""),
         }
+        
+        # Add source information
+        if "source" in flow and isinstance(flow["source"], dict):
+            source = flow["source"]
+            self._attr_extra_state_attributes["source_id"] = source.get("id", "unknown")
+            self._attr_extra_state_attributes["source_ip"] = source.get("ip", "unknown")
+            self._attr_extra_state_attributes["source_name"] = source.get("name", "unknown")
+        
+        # Add destination information
+        if "destination" in flow and isinstance(flow["destination"], dict):
+            destination = flow["destination"]
+            self._attr_extra_state_attributes["destination_id"] = destination.get("id", "unknown")
+            self._attr_extra_state_attributes["destination_ip"] = destination.get("ip", "unknown")
+            self._attr_extra_state_attributes["destination_name"] = destination.get("name", "unknown")
+        
+        # Add device information
+        if "device" in flow and isinstance(flow["device"], dict):
+            device = flow["device"]
+            self._attr_extra_state_attributes["device_id"] = device.get("id", "unknown")
+            self._attr_extra_state_attributes["device_ip"] = device.get("ip", "unknown")
+            self._attr_extra_state_attributes["device_name"] = device.get("name", "unknown")
+            self._attr_extra_state_attributes["device_port"] = device.get("port", "unknown")
+        
+        # Add network information
+        if "network" in flow and isinstance(flow["network"], dict):
+            network = flow["network"]
+            self._attr_extra_state_attributes["network_id"] = network.get("id", "unknown")
+            self._attr_extra_state_attributes["network_name"] = network.get("name", "unknown")
+        
+        # Add group information
+        if "group" in flow and isinstance(flow["group"], dict):
+            group = flow["group"]
+            self._attr_extra_state_attributes["group_id"] = group.get("id", "unknown")
+            self._attr_extra_state_attributes["group_name"] = group.get("name", "unknown")
+        
+        # Convert timestamp to datetime if possible
+        if "ts" in flow:
+            try:
+                ts = flow["ts"]
+                if isinstance(ts, (int, float)):
+                    dt = datetime.fromtimestamp(ts)
+                    self._attr_extra_state_attributes["timestamp_formatted"] = dt.isoformat()
+            except Exception as e:
+                _LOGGER.debug("Error converting timestamp: %s", e)
 

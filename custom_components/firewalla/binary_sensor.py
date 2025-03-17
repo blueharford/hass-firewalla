@@ -127,44 +127,42 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         # Add MAC address (which is often the id)
         if "mac" in device:
             self._attr_extra_state_attributes["mac_address"] = device["mac"]
+        elif self.device_id.startswith("mac:"):
+            self._attr_extra_state_attributes["mac_address"] = self.device_id[4:]
         
-        # Add network name
-        if "networkName" in device:
-            self._attr_extra_state_attributes["network_name"] = device["networkName"]
-        elif "network_name" in device:
-            self._attr_extra_state_attributes["network_name"] = device["network_name"]
+        # Add network name from the nested network object
+        if "network" in device and isinstance(device["network"], dict):
+            self._attr_extra_state_attributes["network_name"] = device["network"].get("name", "Unknown")
         
-        # Add group name if available
-        if "groupName" in device:
-            self._attr_extra_state_attributes["group_name"] = device["groupName"]
-        elif "group_name" in device:
-            self._attr_extra_state_attributes["group_name"] = device["group_name"]
+        # Add group name from the nested group object
+        if "group" in device and isinstance(device["group"], dict):
+            self._attr_extra_state_attributes["group_name"] = device["group"].get("name", "Unknown")
         
         # Add IP reservation status
-        if "ipReservation" in device:
-            self._attr_extra_state_attributes["ip_reserved"] = device["ipReservation"]
-        elif "ip_reservation" in device:
-            self._attr_extra_state_attributes["ip_reserved"] = device["ip_reservation"]
+        if "ipReserved" in device:
+            self._attr_extra_state_attributes["ip_reserved"] = device["ipReserved"]
         
         # Add MAC vendor information
         if "macVendor" in device:
             self._attr_extra_state_attributes["mac_vendor"] = device["macVendor"]
-        elif "mac_vendor" in device:
-            self._attr_extra_state_attributes["mac_vendor"] = device["mac_vendor"]
         
         # Add last seen timestamp if available
-        last_active = device.get("lastActiveTimestamp") or device.get("last_active_timestamp")
+        last_active = device.get("lastSeen")
         if last_active:
             try:
-                # Convert from milliseconds to seconds
-                last_active_dt = datetime.fromtimestamp(last_active / 1000)
+                # Convert from string to timestamp if needed
+                if isinstance(last_active, str):
+                    last_active = float(last_active)
+            
+                # Convert to datetime
+                last_active_dt = datetime.fromtimestamp(last_active)
                 self._attr_extra_state_attributes["last_seen"] = last_active_dt.isoformat()
-                
+            
                 # Calculate time since last seen
                 now = datetime.now()
                 time_diff = now - last_active_dt
                 self._attr_extra_state_attributes["last_seen_seconds_ago"] = time_diff.total_seconds()
-                
+            
                 # Add human-readable format
                 seconds = time_diff.total_seconds()
                 if seconds < 60:
@@ -265,11 +263,20 @@ class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
         self.alarm_id = alarm["id"]
         
         # Get a descriptive name for the alarm
-        alarm_type = alarm.get("type") or alarm.get("_type", "Unknown")
-        if isinstance(alarm_type, int):
+        alarm_type = alarm.get("type", "Unknown")
+        if isinstance(alarm_type, int) or alarm_type.isdigit():
             alarm_type = f"Type {alarm_type}"
         
-        self._attr_name = f"Firewalla Alarm {alarm_type}"
+        # Create a more descriptive name using the message if available
+        message = alarm.get("message", "")
+        if message:
+            # Truncate long messages
+            if len(message) > 30:
+                message = message[:27] + "..."
+            self._attr_name = f"Alarm: {message}"
+        else:
+            self._attr_name = f"Firewalla Alarm {alarm_type}"
+            
         self._attr_unique_id = f"{DOMAIN}_alarm_{self.alarm_id}"
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
         
@@ -302,6 +309,7 @@ class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
     def _update_attributes(self, alarm: Dict[str, Any]) -> None:
         """Update the entity attributes."""
         # Alarm is active if status is not 2 (cleared)
+        # If status is not present, assume it's active
         self._attr_is_on = alarm.get("status", 1) != 2
         
         # Set additional attributes
@@ -309,8 +317,22 @@ class FirewallaAlarmSensor(CoordinatorEntity, BinarySensorEntity):
             ATTR_ALARM_ID: self.alarm_id,
             "type": alarm.get("type", "Unknown"),
             "message": alarm.get("message", ""),
-            "timestamp": alarm.get("ts", ""),
+            "aid": alarm.get("aid", ""),
         }
+        
+        # Add timestamp information
+        if "ts" in alarm:
+            try:
+                # Convert timestamp to datetime
+                ts = alarm["ts"]
+                if isinstance(ts, (int, float)):
+                    dt = datetime.fromtimestamp(ts)
+                    self._attr_extra_state_attributes["timestamp"] = dt.isoformat()
+                else:
+                    self._attr_extra_state_attributes["timestamp"] = ts
+            except Exception as e:
+                _LOGGER.debug("Error converting timestamp: %s", e)
+                self._attr_extra_state_attributes["timestamp"] = alarm["ts"]
         
         # Add device info if available
         if "device" in alarm and isinstance(alarm["device"], dict):
@@ -334,25 +356,28 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
         self.rule_id = rule["id"]
         
         # Get a descriptive name for the rule
-        rule_name = rule.get("name", "")
-        if not rule_name:
-            # Try to create a descriptive name from the target
-            if "target" in rule and isinstance(rule["target"], dict):
-                target_type = rule["target"].get("type", "")
-                target_value = rule["target"].get("value", "")
-                if target_type and target_value:
-                    rule_name = f"{target_type}:{target_value}"
-                elif target_type:
-                    rule_name = target_type
-            
-            # If still no name, use the action and direction
-            if not rule_name:
-                action = rule.get("action", "")
-                direction = rule.get("direction", "")
-                if action and direction:
-                    rule_name = f"{action}_{direction}"
-                elif action:
-                    rule_name = action
+        rule_name = ""
+        
+        # Try to create a descriptive name from the action and target
+        action = rule.get("action", "").capitalize()
+        direction = rule.get("direction", "")
+        
+        # Get target information
+        target_type = ""
+        target_value = ""
+        if "target" in rule and isinstance(rule["target"], dict):
+            target_type = rule["target"].get("type", "")
+            target_value = rule["target"].get("value", "")
+        
+        # Create a descriptive name
+        if action and target_type and target_value:
+            rule_name = f"{action} {target_type} {target_value}"
+        elif action and target_type:
+            rule_name = f"{action} {target_type}"
+        elif action and direction:
+            rule_name = f"{action} {direction}"
+        elif action:
+            rule_name = action
         
         # If still no name, use the ID
         if not rule_name:
@@ -399,6 +424,7 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
             "action": rule.get("action", "Unknown"),
             "direction": rule.get("direction", "Unknown"),
             "status": rule.get("status", "Unknown"),
+            "notes": rule.get("notes", ""),
         }
         
         # Add target information if available
@@ -407,6 +433,8 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
             self._attr_extra_state_attributes["target_type"] = target.get("type", "")
             if "value" in target:
                 self._attr_extra_state_attributes["target_value"] = target["value"]
+            if "dnsOnly" in target:
+                self._attr_extra_state_attributes["target_dns_only"] = target["dnsOnly"]
         
         # Add scope information if available
         if "scope" in rule and isinstance(rule["scope"], dict):
@@ -419,7 +447,15 @@ class FirewallaRuleStatusSensor(CoordinatorEntity, BinarySensorEntity):
         
         # Add timestamp information
         if "ts" in rule:
-            self._attr_extra_state_attributes["created_at"] = rule["ts"]
-        if "updateTs" in rule:
-            self._attr_extra_state_attributes["updated_at"] = rule["updateTs"]
+            try:
+                # Convert timestamp to datetime
+                ts = rule["ts"]
+                if isinstance(ts, (int, float)):
+                    dt = datetime.fromtimestamp(ts)
+                    self._attr_extra_state_attributes["created_at"] = dt.isoformat()
+                else:
+                    self._attr_extra_state_attributes["created_at"] = ts
+            except Exception as e:
+                _LOGGER.debug("Error converting timestamp: %s", e)
+                self._attr_extra_state_attributes["created_at"] = rule["ts"]
 

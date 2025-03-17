@@ -315,48 +315,45 @@ class FirewallaApiClient:
         try:
             # Get the alarms from the API
             alarms_response = await self._api_request("GET", "alarms")
-            
-            if not alarms_response:
-                _LOGGER.warning("No alarms found or endpoint not available")
-                return []
-                
-            # Check if the response is a dictionary with a 'results' key
-            if isinstance(alarms_response, dict) and "results" in alarms_response:
-                alarms = alarms_response["results"]
-                _LOGGER.debug("Extracted alarms from 'results' key")
-            else:
-                alarms = alarms_response
-                
-            # Check if alarms is a list
-            if not isinstance(alarms, list):
-                _LOGGER.warning("Alarms data is not a list: %s", alarms)
-                return []
-                
-            # Process alarms to ensure they have an id
-            processed_alarms = []
-            for alarm in alarms:
-                if isinstance(alarm, dict):
-                    # If alarm doesn't have an id but has a uuid, use that as id
-                    if "id" not in alarm and "uuid" in alarm:
-                        alarm["id"] = alarm["uuid"]
-                    # If alarm doesn't have an id but has aid, use that as id
-                    elif "id" not in alarm and "aid" in alarm:
-                        alarm["id"] = f"alarm_{alarm['aid']}"
-                    # If alarm doesn't have an id but has a type, use that as id
-                    elif "id" not in alarm and "type" in alarm:
-                        alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
-                    # If alarm still doesn't have an id, generate one
-                    elif "id" not in alarm:
-                        alarm["id"] = f"alarm_{len(processed_alarms)}"
-                    
-                    processed_alarms.append(alarm)
-            
-            _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
-            return processed_alarms
-            
-        except Exception as exc:
-            _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
+        
+        if not alarms_response:
+            _LOGGER.warning("No alarms found or endpoint not available")
             return []
+            
+        # Check if the response is a dictionary with a 'results' key
+        if isinstance(alarms_response, dict) and "results" in alarms_response:
+            alarms = alarms_response["results"]
+            _LOGGER.debug("Extracted alarms from 'results' key")
+        else:
+            alarms = alarms_response
+            
+        # Check if alarms is a list
+        if not isinstance(alarms, list):
+            _LOGGER.warning("Alarms data is not a list: %s", alarms)
+            return []
+            
+        # Process alarms to ensure they have an id
+        processed_alarms = []
+        for alarm in alarms:
+            if isinstance(alarm, dict):
+                # If alarm doesn't have an id but has aid, use that as id
+                if "id" not in alarm and "aid" in alarm:
+                    alarm["id"] = f"alarm_{alarm['aid']}"
+                # If alarm doesn't have an id but has a type, use that as id
+                elif "id" not in alarm and "type" in alarm:
+                    alarm["id"] = f"alarm_{alarm['type']}_{len(processed_alarms)}"
+                # If alarm still doesn't have an id, generate one
+                elif "id" not in alarm:
+                    alarm["id"] = f"alarm_{len(processed_alarms)}"
+                
+                processed_alarms.append(alarm)
+        
+        _LOGGER.debug("Retrieved a total of %s alarms", len(processed_alarms))
+        return processed_alarms
+        
+    except Exception as exc:
+        _LOGGER.warning("Error getting alarms (endpoint may not be available): %s", exc)
+        return []
 
     async def get_flows(self) -> List[Dict[str, Any]]:
         """Get all flows."""
@@ -368,7 +365,7 @@ class FirewallaApiClient:
             if not flows_response:
                 _LOGGER.warning("No flows found or endpoint not available")
                 return []
-                
+            
             # Check if the response is a dictionary with a 'results' key
             if isinstance(flows_response, dict) and "results" in flows_response:
                 flows = flows_response["results"]
@@ -385,20 +382,16 @@ class FirewallaApiClient:
             processed_flows = []
             for flow in flows:
                 if isinstance(flow, dict):
-                    # If flow doesn't have an id but has a uuid, use that as id
-                    if "id" not in flow and "uuid" in flow:
-                        flow["id"] = flow["uuid"]
-                    # If flow doesn't have an id but has a flowId, use that as id
-                    elif "id" not in flow and "flowId" in flow:
-                        flow["id"] = flow["flowId"]
-                    # If flow doesn't have an id, generate one based on source and destination
-                    elif "id" not in flow:
-                        src = flow.get("src", "unknown")
-                        dst = flow.get("dst", "unknown")
-                        flow["id"] = f"flow_{src}_{dst}_{len(processed_flows)}"
-                    
-                    processed_flows.append(flow)
-            
+                    # Generate a unique ID for the flow if it doesn't have one
+                    if "id" not in flow:
+                        # Use source and destination if available
+                        src_id = flow.get("source", {}).get("id", "unknown")
+                        dst_id = flow.get("destination", {}).get("id", "unknown")
+                        ts = flow.get("ts", "")
+                        flow["id"] = f"flow_{src_id}_{dst_id}_{ts}"
+                
+                processed_flows.append(flow)
+        
             _LOGGER.debug("Retrieved a total of %s flows", len(processed_flows))
             return processed_flows
             
