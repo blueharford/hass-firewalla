@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Union
 import json
 import ssl
+import base64
 
 from .const import (
     DEFAULT_TIMEOUT,
@@ -37,7 +38,6 @@ class FirewallaApiClient:
         api_secret: Optional[str] = None,
         api_token: Optional[str] = None,
         subdomain: Optional[str] = None,
-        use_mock_data: bool = False,
     ) -> None:
         """Initialize the API client."""
         self._session = session
@@ -47,20 +47,14 @@ class FirewallaApiClient:
         self._api_secret = api_secret
         self._api_token = api_token
         self._subdomain = subdomain
-        self._use_mock_data = use_mock_data
         self._access_token = api_token  # Use api_token as access token if provided
         
-        # After examining the examples more closely, the correct format appears to be:
-        # https://app.firewalla.io/api/v1/msp/access_token/{token}
-        # This is a direct API access using the token in the URL path
-        
-        if api_token:
-            self._base_url = f"https://app.firewalla.io/api/v1/msp/access_token/{api_token}"
-            _LOGGER.debug("Using direct token access URL: %s", self._base_url)
-        elif subdomain:
-            # If no token but subdomain is provided, use the subdomain format
-            self._base_url = f"https://{subdomain}.firewalla.io/api/v1"
-            _LOGGER.debug("Using subdomain API URL: %s", self._base_url)
+        # Try a completely different approach based on the subdomain
+        # The subdomain might be the MSP instance name
+        if subdomain:
+            # Format 1: Direct API with subdomain
+            self._base_url = f"https://{subdomain}.firewalla.io"
+            _LOGGER.debug("Using direct subdomain URL: %s", self._base_url)
         else:
             self._base_url = DEFAULT_API_URL
             _LOGGER.debug("Using default API URL: %s", self._base_url)
@@ -85,41 +79,34 @@ class FirewallaApiClient:
     def _headers(self) -> Dict[str, str]:
         """Get the headers for API requests."""
         headers = {"Content-Type": "application/json"}
-        # Only add Authorization header if we're not using token in URL
-        if self._access_token and not self._base_url.endswith(self._access_token):
+        
+        # Try different authorization methods
+        if self._access_token:
+            # Method 1: Bearer token
             headers["Authorization"] = f"Bearer {self._access_token}"
+            
+            # Method 2: Token header
+            headers["Token"] = self._access_token
+            
+            # Method 3: X-API-Token header
+            headers["X-API-Token"] = self._access_token
+            
+            # Method 4: Basic auth with token as username
+            auth_str = base64.b64encode(f"{self._access_token}:".encode()).decode()
+            headers["Authorization"] = f"Basic {auth_str}"
+            
         return headers
 
     async def authenticate(self) -> bool:
         """Authenticate with the Firewalla API."""
-        if self._use_mock_data:
-            _LOGGER.debug("Using mock data, skipping authentication")
-            self._access_token = "mock_token"
-            self._token_expires_at = datetime.now() + timedelta(hours=1)
-            return True
-
         # If we're using a direct token, we're already authenticated
         if self._auth_method == "token" and self._access_token:
             _LOGGER.debug("Using provided API token, skipping authentication")
-            # Test the token by making a simple API request
-            try:
-                # Try to get devices directly as a validation check
-                result = await self._api_request("GET", "devices")
-                if result:
-                    _LOGGER.debug("Token validation successful")
-                    return True
-                _LOGGER.warning("Token validation failed, using mock data")
-                self._use_mock_data = True
-                return True
-            except Exception as exc:
-                _LOGGER.error("Token validation failed: %s", exc)
-                self._use_mock_data = True
-                return True
+            return True
 
         if not self._auth_method:
             _LOGGER.error("No authentication method configured")
-            self._use_mock_data = True
-            return True
+            return False
 
         try:
             if self._auth_method == "credentials":
@@ -128,119 +115,166 @@ class FirewallaApiClient:
                 return await self._authenticate_with_api_key()
         except Exception as exc:
             _LOGGER.error("Authentication failed: %s", exc)
-            self._use_mock_data = True
-            return True
+            return False
 
     async def _authenticate_with_credentials(self) -> bool:
         """Authenticate using email and password."""
         _LOGGER.debug("Authenticating with email and password")
         
-        # Based on examples, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
-        payload = {
-            "email": self._email,
-            "password": self._password
-        }
+        # Try different login endpoints
+        login_endpoints = [
+            "/api/v1/auth/login",
+            "/api/v1/login",
+            "/api/login",
+            "/login"
+        ]
         
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                response = await self._session.post(login_url, json=payload)
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "Authentication failed with status %s: %s", 
-                        response.status, 
-                        response_text
-                    )
-                    return False
-                
-                try:
-                    data = await response.json()
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
-                    return False
-                
-                if "token" not in data:
-                    _LOGGER.error("No token in authentication response")
-                    return False
-                
-                self._access_token = data["token"]
-                # Set expiration if provided, otherwise default to 1 hour
-                if "expiresIn" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
-                else:
-                    self._token_expires_at = datetime.now() + timedelta(hours=1)
-                
-                _LOGGER.debug("Authentication successful")
-                return True
+        for endpoint in login_endpoints:
+            login_url = f"{self._base_url}{endpoint}"
+            _LOGGER.debug("Trying login endpoint: %s", login_url)
+            
+            payload = {
+                "email": self._email,
+                "password": self._password
+            }
+            
+            try:
+                async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                    response = await self._session.post(login_url, json=payload)
+                    
+                    if response.status != 200:
+                        response_text = await response.text()
+                        _LOGGER.error(
+                            "Authentication failed with status %s: %s", 
+                            response.status, 
+                            response_text
+                        )
+                        continue
+                    
+                    try:
+                        data = await response.json()
+                    except aiohttp.ContentTypeError:
+                        response_text = await response.text()
+                        _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
+                        continue
+                    
+                    # Look for token in different places
+                    token = None
+                    if "token" in data:
+                        token = data["token"]
+                    elif "access_token" in data:
+                        token = data["access_token"]
+                    elif "accessToken" in data:
+                        token = data["accessToken"]
+                    elif "data" in data and "token" in data["data"]:
+                        token = data["data"]["token"]
+                    
+                    if not token:
+                        _LOGGER.error("No token found in authentication response")
+                        continue
+                    
+                    self._access_token = token
+                    # Set expiration if provided, otherwise default to 1 hour
+                    if "expiresIn" in data:
+                        self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
+                    elif "expires_in" in data:
+                        self._token_expires_at = datetime.now() + timedelta(seconds=data["expires_in"])
+                    else:
+                        self._token_expires_at = datetime.now() + timedelta(hours=1)
+                    
+                    _LOGGER.debug("Authentication successful")
+                    return True
+            
+            except asyncio.TimeoutError:
+                _LOGGER.error("Authentication request timed out")
+                continue
+            except Exception as exc:
+                _LOGGER.error("Authentication failed: %s", exc)
+                continue
         
-        except asyncio.TimeoutError:
-            _LOGGER.error("Authentication request timed out")
-            return False
-        except Exception as exc:
-            _LOGGER.error("Authentication failed: %s", exc)
-            return False
+        _LOGGER.error("All authentication attempts failed")
+        return False
 
     async def _authenticate_with_api_key(self) -> bool:
         """Authenticate using API key and secret."""
         _LOGGER.debug("Authenticating with API key and secret")
         
-        # Based on examples, the login endpoint is /auth/login
-        login_url = f"{self._base_url}/auth/login"
+        # Try different login endpoints
+        login_endpoints = [
+            "/api/v1/auth/login",
+            "/api/v1/login",
+            "/api/login",
+            "/login"
+        ]
         
-        payload = {
-            "apiKey": self._api_key,
-            "apiSecret": self._api_secret
-        }
+        for endpoint in login_endpoints:
+            login_url = f"{self._base_url}{endpoint}"
+            _LOGGER.debug("Trying login endpoint: %s", login_url)
+            
+            payload = {
+                "apiKey": self._api_key,
+                "apiSecret": self._api_secret
+            }
+            
+            try:
+                async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                    response = await self._session.post(login_url, json=payload)
+                    
+                    if response.status != 200:
+                        response_text = await response.text()
+                        _LOGGER.error(
+                            "API key authentication failed with status %s: %s", 
+                            response.status, 
+                            response_text
+                        )
+                        continue
+                    
+                    try:
+                        data = await response.json()
+                    except aiohttp.ContentTypeError:
+                        response_text = await response.text()
+                        _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
+                        continue
+                    
+                    # Look for token in different places
+                    token = None
+                    if "token" in data:
+                        token = data["token"]
+                    elif "access_token" in data:
+                        token = data["access_token"]
+                    elif "accessToken" in data:
+                        token = data["accessToken"]
+                    elif "data" in data and "token" in data["data"]:
+                        token = data["data"]["token"]
+                    
+                    if not token:
+                        _LOGGER.error("No token found in authentication response")
+                        continue
+                    
+                    self._access_token = token
+                    # Set expiration if provided, otherwise default to 1 hour
+                    if "expiresIn" in data:
+                        self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
+                    elif "expires_in" in data:
+                        self._token_expires_at = datetime.now() + timedelta(seconds=data["expires_in"])
+                    else:
+                        self._token_expires_at = datetime.now() + timedelta(hours=1)
+                    
+                    _LOGGER.debug("API key authentication successful")
+                    return True
+            
+            except asyncio.TimeoutError:
+                _LOGGER.error("Authentication request timed out")
+                continue
+            except Exception as exc:
+                _LOGGER.error("API key authentication failed: %s", exc)
+                continue
         
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                response = await self._session.post(login_url, json=payload)
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "API key authentication failed with status %s: %s", 
-                        response.status, 
-                        response_text
-                    )
-                    return False
-                
-                try:
-                    data = await response.json()
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Authentication response is not valid JSON: %s", response_text)
-                    return False
-                
-                if "token" not in data:
-                    _LOGGER.error("No token in authentication response")
-                    return False
-                
-                self._access_token = data["token"]
-                # Set expiration if provided, otherwise default to 1 hour
-                if "expiresIn" in data:
-                    self._token_expires_at = datetime.now() + timedelta(seconds=data["expiresIn"])
-                else:
-                    self._token_expires_at = datetime.now() + timedelta(hours=1)
-                
-                _LOGGER.debug("API key authentication successful")
-                return True
-        
-        except asyncio.TimeoutError:
-            _LOGGER.error("Authentication request timed out")
-            return False
-        except Exception as exc:
-            _LOGGER.error("API key authentication failed: %s", exc)
-            return False
+        _LOGGER.error("All API key authentication attempts failed")
+        return False
 
     async def _ensure_authenticated(self) -> bool:
         """Ensure the client is authenticated."""
-        if self._use_mock_data:
-            return True
-            
         if not self._access_token or (
             self._token_expires_at and datetime.now() >= self._token_expires_at
         ):
@@ -256,184 +290,177 @@ class FirewallaApiClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
         """Make an API request."""
-        # If using token in URL, the endpoint is already part of the base URL
-        if self._auth_method == "token" and self._base_url.endswith(self._access_token):
-            url = f"{self._base_url}/{endpoint}" if endpoint else self._base_url
-        else:
-            url = f"{self._base_url}/{endpoint}"
+        # Try different API endpoints
+        api_prefixes = [
+            "/api/v1",
+            "/api",
+            ""
+        ]
         
         # Create SSL context that ignores certificate errors
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         
-        try:
-            async with async_timeout.timeout(DEFAULT_TIMEOUT):
-                _LOGGER.debug("%s request to %s", method, url)
-                
-                # Make the request with SSL context
-                response = await self._session.request(
-                    method, 
-                    url, 
-                    headers=self._headers, 
-                    params=params,
-                    json=data,
-                    ssl=ssl_context
-                )
-                
-                # Check if we got HTML instead of JSON
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    response_text = await response.text()
-                    if "<html" in response_text:
-                        _LOGGER.error("Received HTML response instead of JSON. URL: %s", url)
-                        _LOGGER.debug("HTML response: %s", response_text[:200])  # Log first 200 chars
-                        return None
-                
-                if response.status != 200:
-                    response_text = await response.text()
-                    _LOGGER.error(
-                        "Error from Firewalla API: %s %s", 
-                        response.status, 
-                        response_text
+        for prefix in api_prefixes:
+            url = f"{self._base_url}{prefix}/{endpoint}"
+            _LOGGER.debug("%s request to %s", method, url)
+            
+            try:
+                async with async_timeout.timeout(DEFAULT_TIMEOUT):
+                    # Make the request with SSL context
+                    response = await self._session.request(
+                        method, 
+                        url, 
+                        headers=self._headers, 
+                        params=params,
+                        json=data,
+                        ssl=ssl_context
                     )
-                    return None
-                
-                try:
-                    result = await response.json()
-                    _LOGGER.debug("API request successful")
-                    return result
-                except aiohttp.ContentTypeError:
-                    response_text = await response.text()
-                    _LOGGER.error("Invalid JSON response: %s", response_text)
-                    return None
-                
-        except asyncio.TimeoutError:
-            _LOGGER.error("Request to %s timed out", url)
-            return None
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Error making request to %s: %s", url, err)
-            return None
-        except Exception as exc:
-            _LOGGER.error("Unexpected error making request to %s: %s", url, exc)
-            return None
+                    
+                    # Check if we got HTML instead of JSON
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/html" in content_type:
+                        response_text = await response.text()
+                        if "<html" in response_text:
+                            _LOGGER.debug("Received HTML response instead of JSON. URL: %s", url)
+                            continue
+                    
+                    if response.status != 200:
+                        response_text = await response.text()
+                        _LOGGER.debug(
+                            "Error from Firewalla API: %s %s", 
+                            response.status, 
+                            response_text
+                        )
+                        continue
+                    
+                    try:
+                        result = await response.json()
+                        _LOGGER.debug("API request successful")
+                        return result
+                    except aiohttp.ContentTypeError:
+                        response_text = await response.text()
+                        _LOGGER.debug("Invalid JSON response: %s", response_text)
+                        continue
+                    
+            except asyncio.TimeoutError:
+                _LOGGER.debug("Request to %s timed out", url)
+                continue
+            except aiohttp.ClientError as err:
+                _LOGGER.debug("Error making request to %s: %s", url, err)
+                continue
+            except Exception as exc:
+                _LOGGER.debug("Unexpected error making request to %s: %s", url, exc)
+                continue
+        
+        # If we're here, all attempts failed
+        _LOGGER.error("All API request attempts failed for endpoint: %s", endpoint)
+        return None
 
     async def async_check_credentials(self) -> bool:
         """Check if credentials are valid."""
-        # Try to get user info as a validation check
-        if self._use_mock_data:
-            return True
-            
-        # Try a simple API request to check credentials - get devices directly
-        result = await self._api_request("GET", "devices")
-        if result:
-            return True
-            
-        # If that fails, use mock data
-        _LOGGER.warning("Failed to validate credentials, using mock data")
-        self._use_mock_data = True
-        return True
+        # Try different endpoints to check credentials
+        check_endpoints = [
+            "devices",
+            "networks",
+            "users/me",
+            "user",
+            "status"
+        ]
+        
+        for endpoint in check_endpoints:
+            result = await self._api_request("GET", endpoint)
+            if result:
+                _LOGGER.info("Credential check successful with endpoint: %s", endpoint)
+                return True
+        
+        # If all attempts fail, return failure
+        _LOGGER.error("Failed to validate credentials")
+        return False
 
     async def block_device(self, device_id: str, network_id: str) -> bool:
         """Block a device."""
-        if self._use_mock_data:
-            return True
-            
-        # Based on examples, the endpoint is /devices/{deviceId}/block
-        endpoint = f"devices/{device_id}/block"
-        params = {"networkId": network_id}
+        # Try different block endpoints
+        block_endpoints = [
+            f"devices/{device_id}/block",
+            f"device/{device_id}/block",
+            f"block/{device_id}"
+        ]
         
-        result = await self._api_request("POST", endpoint, params=params)
-        return result is not None
+        for endpoint in block_endpoints:
+            params = {"networkId": network_id} if network_id else None
+            result = await self._api_request("POST", endpoint, params=params)
+            if result:
+                return True
+        
+        # If all attempts fail, return failure
+        return False
 
     async def unblock_device(self, device_id: str, network_id: str) -> bool:
         """Unblock a device."""
-        if self._use_mock_data:
-            return True
-            
-        # Based on examples, the endpoint is /devices/{deviceId}/unblock
-        endpoint = f"devices/{device_id}/unblock"
-        params = {"networkId": network_id}
+        # Try different unblock endpoints
+        unblock_endpoints = [
+            f"devices/{device_id}/unblock",
+            f"device/{device_id}/unblock",
+            f"unblock/{device_id}"
+        ]
         
-        result = await self._api_request("POST", endpoint, params=params)
-        return result is not None
+        for endpoint in unblock_endpoints:
+            params = {"networkId": network_id} if network_id else None
+            result = await self._api_request("POST", endpoint, params=params)
+            if result:
+                return True
+        
+        # If all attempts fail, return failure
+        return False
 
     async def get_devices(self) -> List[Dict[str, Any]]:
         """Get all devices across all networks."""
-        if self._use_mock_data:
-            _LOGGER.debug("Using mock data for devices")
-            return self._get_mock_devices()
-
         # Make sure we're authenticated
         if not await self._ensure_authenticated():
             _LOGGER.error("Failed to authenticate")
-            return self._get_mock_devices()
+            return []
 
         try:
-            # Simplified approach: Try to get devices directly
-            # This skips the organizations and networks checks
-            _LOGGER.debug("Getting devices directly")
-            devices = await self._api_request("GET", "devices")
+            # Try different device endpoints
+            device_endpoints = [
+                "devices",
+                "device",
+                "hosts"
+            ]
             
-            if not devices or not isinstance(devices, list):
-                _LOGGER.warning("No devices found, using mock data")
-                return self._get_mock_devices()
-            
-            # Process the devices
-            for device in devices:
-                # Ensure online status is properly set
-                if "online" not in device:
-                    # If online status is not explicitly set, determine from lastActiveTimestamp
-                    last_active = device.get("lastActiveTimestamp")
-                    if last_active:
-                        # Consider device offline if last active more than 5 minutes ago
-                        now = datetime.now().timestamp() * 1000
-                        device["online"] = (now - last_active) < (5 * 60 * 1000)
-                    else:
-                        device["online"] = False
+            for endpoint in device_endpoints:
+                devices = await self._api_request("GET", endpoint)
                 
-                # Ensure networkId is set
-                if "networkId" not in device:
-                    device["networkId"] = "default"
+                if devices and isinstance(devices, list) and len(devices) > 0:
+                    _LOGGER.info("Successfully retrieved devices from endpoint: %s", endpoint)
+                    
+                    # Process the devices
+                    for device in devices:
+                        # Ensure online status is properly set
+                        if "online" not in device:
+                            # If online status is not explicitly set, determine from lastActiveTimestamp
+                            last_active = device.get("lastActiveTimestamp")
+                            if last_active:
+                                # Consider device offline if last active more than 5 minutes ago
+                                now = datetime.now().timestamp() * 1000
+                                device["online"] = (now - last_active) < (5 * 60 * 1000)
+                            else:
+                                device["online"] = False
+                        
+                        # Ensure networkId is set
+                        if "networkId" not in device:
+                            device["networkId"] = "default"
+                    
+                    _LOGGER.debug("Retrieved a total of %s devices", len(devices))
+                    return devices
             
-            _LOGGER.debug("Retrieved a total of %s devices", len(devices))
-            return devices
+            # If all attempts fail, return empty list
+            _LOGGER.error("Failed to retrieve devices")
+            return []
                 
         except Exception as exc:
             _LOGGER.error("Error getting devices: %s", exc)
-            return self._get_mock_devices()  # Use mock data as fallback
-
-    def _get_mock_devices(self) -> List[Dict[str, Any]]:
-        """Return mock device data for testing."""
-        _LOGGER.debug("Generating mock device data")
-        return [
-            {
-                "id": "mock_device_1",
-                "name": "Mock Device 1",
-                "mac": "00:11:22:33:44:55",
-                "ip": "192.168.1.100",
-                "online": True,
-                "lastActiveTimestamp": int(datetime.now().timestamp() * 1000),
-                "networkId": "mock_network_1",
-                "stats": {
-                    "upload": 1024,
-                    "download": 2048,
-                    "blockedCount": 15
-                }
-            },
-            {
-                "id": "mock_device_2",
-                "name": "Mock Device 2",
-                "mac": "AA:BB:CC:DD:EE:FF",
-                "ip": "192.168.1.101",
-                "online": False,
-                "lastActiveTimestamp": int((datetime.now() - timedelta(hours=2)).timestamp() * 1000),
-                "networkId": "mock_network_1",
-                "stats": {
-                    "upload": 512,
-                    "download": 1024,
-                    "blockedCount": 5
-                }
-            }
-        ]
+            return []
 

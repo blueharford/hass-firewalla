@@ -11,7 +11,6 @@ CONF_API_KEY: Final = "api_key"
 CONF_API_SECRET: Final = "api_secret"
 CONF_API_TOKEN: Final = "api_token"
 CONF_SUBDOMAIN: Final = "subdomain"
-CONF_USE_MOCK_DATA: Final = "use_mock_data"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 
 # Default values

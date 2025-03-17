@@ -31,7 +31,6 @@ from .const import (
     API_CLIENT,
     CONF_API_KEY,
     CONF_API_SECRET,
-    CONF_USE_MOCK_DATA,
     PLATFORMS,
 )
 from .api import FirewallaApiClient
@@ -61,7 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Firewalla from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     
-    session = async_get_clientsession(hass)
+    session = async_get_clientsession(self.hass)
     
     # Get the subdomain from the config entry
     subdomain = entry.data.get(CONF_SUBDOMAIN, DEFAULT_SUBDOMAIN)
@@ -77,7 +76,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api_secret=entry.data.get(CONF_API_SECRET),
         api_token=entry.data.get(CONF_API_TOKEN),
         subdomain=subdomain,
-        use_mock_data=entry.data.get(CONF_USE_MOCK_DATA, False),
     )
     
     # Test the API connection
@@ -113,8 +111,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Get initial devices
     try:
         devices = coordinator.data.get("devices", []) if coordinator.data else []
-        if not devices and not entry.data.get(CONF_USE_MOCK_DATA, False):
-            _LOGGER.warning("No devices found from Firewalla API. Check your network configuration.")
         
         hass.data[DOMAIN][entry.entry_id]["devices"] = {
             device["id"]: device for device in devices
@@ -122,8 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Found %s devices from Firewalla", len(devices))
     except Exception as exc:
         _LOGGER.error("Error processing initial devices: %s", exc)
-        if not entry.data.get(CONF_USE_MOCK_DATA, False):
-            raise ConfigEntryNotReady("Failed to process initial device data") from exc
+        raise ConfigEntryNotReady("Failed to process initial device data") from exc
     
     # Set up platforms using the new async_forward_entry_setups method
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

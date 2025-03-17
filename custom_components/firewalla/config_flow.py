@@ -12,7 +12,6 @@ from .const import (
     CONF_API_TOKEN, 
     CONF_SUBDOMAIN, 
     DEFAULT_SUBDOMAIN, 
-    CONF_USE_MOCK_DATA,
     CONF_API_KEY,
     CONF_API_SECRET,
     CONF_EMAIL,
@@ -39,16 +38,11 @@ class FirewallaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 session=session,
                 api_token=user_input.get(CONF_API_TOKEN),
                 subdomain=user_input.get(CONF_SUBDOMAIN),
-                use_mock_data=user_input.get(CONF_USE_MOCK_DATA, False),
             )
 
             try:
                 # Test the API connection
-                if user_input.get(CONF_USE_MOCK_DATA, False):
-                    # Skip authentication check if using mock data
-                    auth_success = True
-                else:
-                    auth_success = await api_client.async_check_credentials()
+                auth_success = await api_client.async_check_credentials()
                 
                 if auth_success:
                     # Use a combination of subdomain and token as the unique ID
@@ -71,7 +65,6 @@ class FirewallaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_SUBDOMAIN, default=DEFAULT_SUBDOMAIN): str,
                     vol.Required(CONF_API_TOKEN): str,
-                    vol.Optional(CONF_USE_MOCK_DATA, default=False): bool,
                 }
             ),
             errors=errors,
