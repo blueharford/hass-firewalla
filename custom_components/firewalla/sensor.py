@@ -51,11 +51,18 @@ async def async_setup_entry(
                 device_id = None
                 
                 # First check if the flow has a device field
-                if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
-                    device_id = flow["device"]["id"]
+                if "device" in flow and isinstance(flow["device"], dict):
+                    if "id" in flow["device"]:
+                        device_id = flow["device"]["id"]
+                    elif "mac" in flow["device"]:
+                        device_id = flow["device"]["mac"]
+                
                 # If not, try to use the source device
-                elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
-                    device_id = flow["source"]["id"]
+                if not device_id and "source" in flow and isinstance(flow["source"], dict):
+                    if "id" in flow["source"]:
+                        device_id = flow["source"]["id"]
+                    elif "mac" in flow["source"]:
+                        device_id = flow["source"]["mac"]
                 
                 if device_id:
                     if device_id not in device_flows:
@@ -105,6 +112,13 @@ async def async_setup_entry(
                 if device_id in device_flows:
                     for flow in device_flows[device_id]:
                         entities.append(FirewallaFlowSensor(coordinator, flow, device))
+                
+                # Also check if this device's MAC address matches any flow device
+                if "mac" in device:
+                    device_mac = device["mac"]
+                    if device_mac in device_flows:
+                        for flow in device_flows[device_mac]:
+                            entities.append(FirewallaFlowSensor(coordinator, flow, device))
             else:
                 _LOGGER.warning("Skipping device without id: %s", device)
     
@@ -119,20 +133,19 @@ async def async_setup_entry(
                 _LOGGER.warning("Skipping box without id: %s", box)
     
     # Add any remaining flow sensors that couldn't be associated with a device
+    processed_flow_ids = set()
+    
+    # First, collect all flow IDs that have already been processed
+    for device_id, flows in device_flows.items():
+        for flow in flows:
+            processed_flow_ids.add(flow["id"])
+    
+    # Then add any remaining flows
     if coordinator.data and "flows" in coordinator.data:
         for flow in coordinator.data["flows"]:
-            if isinstance(flow, dict) and "id" in flow:
-                # Check if this flow was already added to a device
-                device_id = None
-                if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
-                    device_id = flow["device"]["id"]
-                elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
-                    device_id = flow["source"]["id"]
-                
-                # If we couldn't associate this flow with a device or the device doesn't exist,
-                # create a standalone flow sensor
-                if not device_id or device_id not in device_flows:
-                    entities.append(FirewallaFlowSensor(coordinator, flow, None))
+            if isinstance(flow, dict) and "id" in flow and flow["id"] not in processed_flow_ids:
+                # Create a standalone flow sensor
+                entities.append(FirewallaFlowSensor(coordinator, flow, None))
     
     async_add_entities(entities)
 
@@ -552,7 +565,7 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{DOMAIN}_flow_{self.flow_id}"
         self._attr_device_class = SensorDeviceClass.DATA_SIZE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfInformation.BYTES
+        self._attr_native_unit_of_measurement = UnitOfInformation.KILOBYTES
         
         # Set up device info - associate with the provided device if available
         if device:
@@ -566,10 +579,16 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
         else:
             # If no device provided, try to get device info from the flow
             device_id = None
-            if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
-                device_id = flow["device"]["id"]
-            elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
-                device_id = flow["source"]["id"]
+            if "device" in flow and isinstance(flow["device"], dict):
+                if "id" in flow["device"]:
+                    device_id = flow["device"]["id"]
+                elif "mac" in flow["device"]:
+                    device_id = flow["device"]["mac"]
+            elif "source" in flow and isinstance(flow["source"], dict):
+                if "id" in flow["source"]:
+                    device_id = flow["source"]["id"]
+                elif "mac" in flow["source"]:
+                    device_id = flow["source"]["mac"]
             
             if device_id:
                 device_name = None
@@ -588,34 +607,27 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
         self._update_attributes(flow)
     
     @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if not self.coordinator.data or "flows" not in self.coordinator.data:
-            return
-            
-        for flow in self.coordinator.data["flows"]:
-            if flow["id"] == self.flow_id:
-                self._update_attributes(flow)
-                break
-                
-        self.async_write_ha_state()
-    
-    @callback
     def _update_attributes(self, flow: Dict[str, Any]) -> None:
         """Update the entity attributes."""
         # Use the total bytes (download + upload) as the state value
         download = flow.get("download", 0)
         upload = flow.get("upload", 0)
-        self._attr_native_value = download + upload
         
-        # Set additional attributes
+        # Convert bytes to kilobytes
+        total_kb = (download + upload) / 1024 if (download + upload) else 0
+        self._attr_native_value = round(total_kb, 2)
+        
+        # Set additional attributes (also convert to KB)
+        download_kb = download / 1024 if download else 0
+        upload_kb = upload / 1024 if upload else 0
+        
         self._attr_extra_state_attributes = {
             "flow_id": self.flow_id,
             "protocol": flow.get("protocol", "unknown"),
             "direction": flow.get("direction", "unknown"),
             "blocked": flow.get("block", False),
-            "download": download,
-            "upload": upload,
+            "download_kb": round(download_kb, 2),
+            "upload_kb": round(upload_kb, 2),
             "duration": flow.get("duration", 0),
             "category": flow.get("category", "unknown"),
             "region": flow.get("region", "unknown"),
