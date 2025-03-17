@@ -4,7 +4,7 @@ DOMAIN = "firewalla"
 CONF_API_TOKEN = "api_token"
 CONF_SUBDOMAIN = "subdomain"
 DEFAULT_SCAN_INTERVAL = 60  # seconds
-DEFAULT_SUBDOMAIN = "mysubdomain"  # Default subdomain as a fallback
+DEFAULT_SUBDOMAIN = "<yoursubdomainhere>"  # Default subdomain as a fallback
 
 # Data coordinator and API client keys
 COORDINATOR = "coordinator"

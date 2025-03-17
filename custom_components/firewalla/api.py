@@ -2,6 +2,7 @@
 import logging
 import aiohttp
 import json
+import re
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,17 +18,31 @@ class FirewallaApiClient:
         self._headers = {
             "Authorization": f"Bearer {self._api_token}",
             "Content-Type": "application/json",
-            "Accept": "application/json",  # Explicitly request JSON response
+            "Accept": "application/json",
         }
         self._base_url = f"https://{self._subdomain}.firewalla.net/api"
+        _LOGGER.debug("Initialized Firewalla API client with base URL: %s", self._base_url)
 
-    async def _api_request(self, method, endpoint, data=None):
+    async def _api_request(self, method, endpoint, data=None, auth_test=False):
         """Make an API request."""
         url = f"{self._base_url}/{endpoint}"
         
         try:
+            _LOGGER.debug("Making %s request to %s", method, url)
+            
+            # For authentication testing, we'll try different auth methods
+            headers = self._headers
+            if auth_test:
+                # Try without the 'Bearer' prefix as some APIs just want the token
+                headers = {
+                    "Authorization": self._api_token,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+                _LOGGER.debug("Using simplified Authorization header for auth test")
+            
             async with self._session.request(
-                method, url, headers=self._headers, json=data
+                method, url, headers=headers, json=data
             ) as resp:
                 _LOGGER.debug("API response status: %s for URL: %s", resp.status, url)
                 
@@ -38,9 +53,14 @@ class FirewallaApiClient:
                 # Get response text
                 text = await resp.text()
                 
+                # For auth testing, we consider any successful response as valid
+                if auth_test and resp.status == 200:
+                    _LOGGER.debug("Auth test successful with status 200")
+                    return {"success": True}
+                
                 if resp.status != 200:
                     _LOGGER.error(
-                        "Error from Firewalla API: %s %s", resp.status, text
+                        "Error from Firewalla API: %s %s", resp.status, text[:200]
                     )
                     return None
                 
@@ -50,6 +70,12 @@ class FirewallaApiClient:
                 except json.JSONDecodeError as err:
                     _LOGGER.error("Failed to parse JSON response from %s: %s", endpoint, err)
                     _LOGGER.debug("Response content: %s", text[:200] + "..." if len(text) > 200 else text)
+                    
+                    # For auth testing, check if the response contains any indication of success
+                    if auth_test and ("success" in text.lower() or "welcome" in text.lower()):
+                        _LOGGER.debug("Auth test successful based on response content")
+                        return {"success": True}
+                    
                     return None
                 
         except aiohttp.ClientError as err:
@@ -57,47 +83,74 @@ class FirewallaApiClient:
             return None
 
     async def async_check_credentials(self):
-        """Check if credentials are valid.
+        """Check if credentials are valid."""
+        # First, try to access the base URL to see if the domain is correct
+        try:
+            _LOGGER.debug("Testing base domain connectivity")
+            async with self._session.get(
+                f"https://{self._subdomain}.firewalla.net/", 
+                timeout=10
+            ) as resp:
+                _LOGGER.debug("Base domain response: %s", resp.status)
+                if resp.status != 200:
+                    _LOGGER.error("Failed to connect to base domain. Check your subdomain.")
+                    raise Exception(f"Failed to connect to {self._subdomain}.firewalla.net - Check your subdomain")
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Error connecting to base domain: %s", err)
+            raise Exception(f"Failed to connect to {self._subdomain}.firewalla.net - {err}")
         
-        Prioritizes endpoints that are known to return JSON.
-        """
-        # Try /device endpoint first as it's more likely to exist and return JSON
-        _LOGGER.debug("Checking authentication with /device endpoint")
-        result = await self._api_request("GET", "device")
-        if result is not None:
-            _LOGGER.debug("Successfully authenticated with /device endpoint")
-            return True
+        # Try different authentication approaches
+        auth_methods = [
+            # Standard Bearer token auth
+            {"method": "GET", "endpoint": "device", "auth_test": False},
+            {"method": "GET", "endpoint": "flow", "auth_test": False},
+            {"method": "GET", "endpoint": "alarm", "auth_test": False},
+            {"method": "GET", "endpoint": "rule", "auth_test": False},
+            # Try with simplified auth header
+            {"method": "GET", "endpoint": "device", "auth_test": True},
+            {"method": "GET", "endpoint": "flow", "auth_test": True},
+            # Try the root API endpoint
+            {"method": "GET", "endpoint": "", "auth_test": False},
+            {"method": "GET", "endpoint": "", "auth_test": True},
+            # Last resort
+            {"method": "GET", "endpoint": "users/me", "auth_test": False},
+        ]
+        
+        for i, auth_method in enumerate(auth_methods):
+            _LOGGER.debug(
+                "Trying authentication method %d: %s %s (auth_test=%s)",
+                i + 1,
+                auth_method["method"],
+                auth_method["endpoint"],
+                auth_method["auth_test"]
+            )
             
-        # If that fails, try /flow
-        _LOGGER.debug("Checking authentication with /flow endpoint")
-        result = await self._api_request("GET", "flow")
-        if result is not None:
-            _LOGGER.debug("Successfully authenticated with /flow endpoint")
-            return True
+            result = await self._api_request(
+                auth_method["method"],
+                auth_method["endpoint"],
+                auth_test=auth_method["auth_test"]
+            )
             
-        # If that fails, try /alarm
-        _LOGGER.debug("Checking authentication with /alarm endpoint")
-        result = await self._api_request("GET", "alarm")
-        if result is not None:
-            _LOGGER.debug("Successfully authenticated with /alarm endpoint")
-            return True
-            
-        # If that fails, try /rule
-        _LOGGER.debug("Checking authentication with /rule endpoint")
-        result = await self._api_request("GET", "rule")
-        if result is not None:
-            _LOGGER.debug("Successfully authenticated with /rule endpoint")
-            return True
-            
-        # Only try /users/me as a last resort since it might not return JSON
-        _LOGGER.debug("Checking authentication with /users/me endpoint")
-        result = await self._api_request("GET", "users/me")
-        if result is not None:
-            _LOGGER.debug("Successfully authenticated with /users/me endpoint")
-            return True
-            
+            if result is not None:
+                _LOGGER.debug("Authentication successful with method %d", i + 1)
+                return True
+        
+        # If we get here, all authentication methods failed
         _LOGGER.error("Failed to authenticate with any Firewalla API endpoint")
-        raise Exception("Failed to authenticate with Firewalla API")
+        
+        # Try to get more diagnostic information
+        try:
+            _LOGGER.debug("Attempting to get diagnostic information")
+            async with self._session.get(
+                f"https://{self._subdomain}.firewalla.net/api", 
+                timeout=10
+            ) as resp:
+                text = await resp.text()
+                _LOGGER.debug("API root response: %s, Content: %s", resp.status, text[:200])
+        except Exception as err:
+            _LOGGER.debug("Failed to get diagnostic information: %s", err)
+        
+        raise Exception("Failed to authenticate with Firewalla API. Check your API token and subdomain.")
 
     async def async_get_devices(self):
         """Get all devices."""
