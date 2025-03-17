@@ -19,6 +19,7 @@ from .const import (
     ATTR_ALARM_ID, 
     ATTR_DEVICE_ID, 
     ATTR_NETWORK_ID,
+    ATTR_RULE_ID,
     API_CLIENT
 )
 
