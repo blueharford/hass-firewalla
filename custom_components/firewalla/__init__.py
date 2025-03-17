@@ -60,7 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Firewalla from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     
-    session = async_get_clientsession(self.hass)
+    session = async_get_clientsession(hass)
     
     # Get the subdomain from the config entry
     subdomain = entry.data.get(CONF_SUBDOMAIN, DEFAULT_SUBDOMAIN)
