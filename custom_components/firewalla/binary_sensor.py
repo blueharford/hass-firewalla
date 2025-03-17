@@ -43,6 +43,11 @@ async def async_setup_entry(
         for device in coordinator.data["devices"]:
             if isinstance(device, dict) and "id" in device:
                 entities.append(FirewallaOnlineSensor(coordinator, device))
+                
+                # We're removing these sensors as requested:
+                # - Blocked count
+                # - Download rate
+                # - Upload rate
             else:
                 _LOGGER.warning("Skipping device without id: %s", device)
     
@@ -127,6 +132,8 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         # Add MAC address (which is often the id)
         if "mac" in device:
             self._attr_extra_state_attributes["mac_address"] = device["mac"]
+        elif self.device_id.startswith("mac:"):
+              = device["mac"]
         elif self.device_id.startswith("mac:"):
             self._attr_extra_state_attributes["mac_address"] = self.device_id[4:]
         

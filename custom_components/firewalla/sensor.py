@@ -1,6 +1,6 @@
 """Sensor platform for Firewalla integration."""
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from datetime import datetime
 
 from homeassistant.components.sensor import (
@@ -40,10 +40,36 @@ async def async_setup_entry(
     
     entities = []
     
+    # Create a mapping of device IDs to their flow sensors
+    device_flows = {}
+    
+    # Process flows first to group them by device
+    if coordinator.data and "flows" in coordinator.data:
+        for flow in coordinator.data["flows"]:
+            if isinstance(flow, dict) and "id" in flow:
+                # Determine which device this flow belongs to
+                device_id = None
+                
+                # First check if the flow has a device field
+                if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
+                    device_id = flow["device"]["id"]
+                # If not, try to use the source device
+                elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
+                    device_id = flow["source"]["id"]
+                
+                if device_id:
+                    if device_id not in device_flows:
+                        device_flows[device_id] = []
+                    device_flows[device_id].append(flow)
+            else:
+                _LOGGER.warning("Skipping flow without id: %s", flow)
+    
     # Add sensors for each device
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
             if isinstance(device, dict) and "id" in device:
+                device_id = device["id"]
+                
                 # Add MAC address sensor (which is often the id)
                 entities.append(FirewallaMacAddressSensor(coordinator, device))
                 
@@ -74,6 +100,11 @@ async def async_setup_entry(
                 # Add total upload sensor
                 if "totalUpload" in device:
                     entities.append(FirewallaTotalUploadSensor(coordinator, device))
+                
+                # Add flow sensors for this device
+                if device_id in device_flows:
+                    for flow in device_flows[device_id]:
+                        entities.append(FirewallaFlowSensor(coordinator, flow, device))
             else:
                 _LOGGER.warning("Skipping device without id: %s", device)
     
@@ -87,13 +118,21 @@ async def async_setup_entry(
             else:
                 _LOGGER.warning("Skipping box without id: %s", box)
     
-    # Add flow sensors
+    # Add any remaining flow sensors that couldn't be associated with a device
     if coordinator.data and "flows" in coordinator.data:
         for flow in coordinator.data["flows"]:
             if isinstance(flow, dict) and "id" in flow:
-                entities.append(FirewallaFlowSensor(coordinator, flow))
-            else:
-                _LOGGER.warning("Skipping flow without id: %s", flow)
+                # Check if this flow was already added to a device
+                device_id = None
+                if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
+                    device_id = flow["device"]["id"]
+                elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
+                    device_id = flow["source"]["id"]
+                
+                # If we couldn't associate this flow with a device or the device doesn't exist,
+                # create a standalone flow sensor
+                if not device_id or device_id not in device_flows:
+                    entities.append(FirewallaFlowSensor(coordinator, flow, None))
     
     async_add_entities(entities)
 
@@ -488,10 +527,11 @@ class FirewallaBoxTemperatureSensor(FirewallaBoxBaseSensor):
 class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
     """Sensor for Firewalla network flow."""
 
-    def __init__(self, coordinator, flow):
+    def __init__(self, coordinator, flow, device=None):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.flow_id = flow["id"]
+        self.device = device
         
         # Create a descriptive name based on source and destination
         src_name = "unknown"
@@ -503,26 +543,47 @@ class FirewallaFlowSensor(CoordinatorEntity, SensorEntity):
         if "destination" in flow and isinstance(flow["destination"], dict):
             dst_name = flow["destination"].get("name", flow["destination"].get("ip", "unknown"))
         
-        self._attr_name = f"Flow {src_name} to {dst_name}"
+        # If we have a device, use its name as a prefix
+        if device:
+            self._attr_name = f"{device.get('name', 'Unknown')} Flow to {dst_name}"
+        else:
+            self._attr_name = f"Flow {src_name} to {dst_name}"
+            
         self._attr_unique_id = f"{DOMAIN}_flow_{self.flow_id}"
         self._attr_device_class = SensorDeviceClass.DATA_SIZE
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = UnitOfInformation.BYTES
         
-        # Set up device info - associate with the device that generated the flow
-        device_id = None
-        if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
-            device_id = flow["device"]["id"]
-        elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
-            device_id = flow["source"]["id"]
-        
-        if device_id:
+        # Set up device info - associate with the provided device if available
+        if device:
+            device_id = device["id"]
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, device_id)},
-                name=flow.get("device", {}).get("name", f"Device {device_id}"),
+                name=device.get("name", f"Firewalla Device {device_id}"),
                 manufacturer="Firewalla",
                 model="Network Device",
             )
+        else:
+            # If no device provided, try to get device info from the flow
+            device_id = None
+            if "device" in flow and isinstance(flow["device"], dict) and "id" in flow["device"]:
+                device_id = flow["device"]["id"]
+            elif "source" in flow and isinstance(flow["source"], dict) and "id" in flow["source"]:
+                device_id = flow["source"]["id"]
+            
+            if device_id:
+                device_name = None
+                if "device" in flow and isinstance(flow["device"], dict) and "name" in flow["device"]:
+                    device_name = flow["device"]["name"]
+                elif "source" in flow and isinstance(flow["source"], dict) and "name" in flow["source"]:
+                    device_name = flow["source"]["name"]
+                
+                self._attr_device_info = DeviceInfo(
+                    identifiers={(DOMAIN, device_id)},
+                    name=device_name or f"Device {device_id}",
+                    manufacturer="Firewalla",
+                    model="Network Device",
+                )
         
         self._update_attributes(flow)
     
