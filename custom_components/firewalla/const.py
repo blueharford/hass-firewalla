@@ -32,6 +32,7 @@ API_DEVICES_ENDPOINT: Final = "/devices"
 
 # Entity attributes
 ATTR_DEVICE_ID: Final = "device_id"
+ATTR_DEVICE_NAME: Final = "device_name"
 ATTR_NETWORK_ID: Final = "network_id"
 ATTR_LAST_SEEN: Final = "last_seen"
 ATTR_IP_ADDRESS: Final = "ip_address"

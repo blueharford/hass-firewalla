@@ -5,7 +5,7 @@
           "title": "Connect to Firewalla",
           "description": "Set up Firewalla integration. You need to create a personal access token in your Firewalla MSP account.",
           "data": {
-            "subdomain": "Firewalla Subdomain (e.g., dn-jeyeek)",
+            "subdomain": "Firewalla Subdomain",
             "api_token": "API Token"
           }
         }

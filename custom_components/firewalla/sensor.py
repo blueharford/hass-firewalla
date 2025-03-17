@@ -1,13 +1,28 @@
 """Sensor platform for Firewalla integration."""
 import logging
+from typing import Any, Dict, Optional
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import (
+    UnitOfDataRate,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, COORDINATOR, ATTR_DEVICE_ID, ATTR_DEVICE_NAME
+from .const import (
+    DOMAIN,
+    COORDINATOR,
+    ATTR_DEVICE_ID,
+    ATTR_DEVICE_NAME,
+    ATTR_NETWORK_ID,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,205 +30,148 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ):
-    """Set up Firewalla sensors based on a config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id][COORDINATOR]
+    """Set up sensors for Firewalla devices."""
+    coordinator = hass.data[DOMAIN][entry.entry_id].get(COORDINATOR)
+    
+    if not coordinator:
+        _LOGGER.error("No coordinator found for entry %s", entry.entry_id)
+        return
     
     entities = []
     
-    # Add device sensors
+    # Add sensors for each device
     if coordinator.data and "devices" in coordinator.data:
         for device in coordinator.data["devices"]:
-            entities.append(FirewallaDeviceStatusSensor(coordinator, device))
-            entities.append(FirewallaDeviceConnectionsSensor(coordinator, device))
-    
-    # Add flow sensors
-    if coordinator.data and "flows" in coordinator.data:
-        for flow in coordinator.data["flows"]:
-            entities.append(FirewallaFlowSensor(coordinator, flow))
+            entities.append(FirewallaUploadSensor(coordinator, device))
+            entities.append(FirewallaDownloadSensor(coordinator, device))
+            entities.append(FirewallaBlockedCountSensor(coordinator, device))
     
     async_add_entities(entities)
 
 
 class FirewallaBaseSensor(CoordinatorEntity, SensorEntity):
-    """Base class for Firewalla sensors."""
+    """Base sensor for Firewalla devices."""
 
-    def __init__(self, coordinator, data):
+    def __init__(
+        self, 
+        coordinator, 
+        device,
+        suffix: str,
+        device_class: Optional[str] = None,
+        state_class: Optional[str] = None,
+        unit_of_measurement: Optional[str] = None,
+    ):
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._data = data
-        self._attr_unique_id = f"{DOMAIN}_{self._get_id()}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._get_device_id())},
-            "name": self._get_device_name(),
-            "manufacturer": "Firewalla",
-            "model": self._get_device_model(),
+        self.device_id = device["id"]
+        self.network_id = device.get("networkId")
+        self._attr_name = f"{device.get('name', 'Unknown')} {suffix}"
+        self._attr_unique_id = f"{DOMAIN}_{suffix.lower().replace(' ', '_')}_{self.device_id}"
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_native_unit_of_measurement = unit_of_measurement
+        
+        # Set up device info
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self.device_id)},
+            name=device.get("name", f"Firewalla Device {self.device_id}"),
+            manufacturer="Firewalla",
+            model="Network Device",
+        )
+        
+        self._update_attributes(device)
+    
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if not self.coordinator.data or "devices" not in self.coordinator.data:
+            return
+            
+        for device in self.coordinator.data["devices"]:
+            if device["id"] == self.device_id:
+                self._update_attributes(device)
+                break
+                
+        self.async_write_ha_state()
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        self._attr_extra_state_attributes = {
+            ATTR_DEVICE_ID: self.device_id,
+            ATTR_NETWORK_ID: self.network_id,
+            ATTR_DEVICE_NAME: device.get("name", "Unknown"),
         }
 
-    def _get_id(self):
-        """Get the ID for this entity."""
-        raise NotImplementedError
 
-    def _get_device_id(self):
-        """Get the device ID for this entity."""
-        raise NotImplementedError
-
-    def _get_device_name(self):
-        """Get the device name for this entity."""
-        raise NotImplementedError
-
-    def _get_device_model(self):
-        """Get the device model for this entity."""
-        return "Unknown"
-
-
-class FirewallaDeviceStatusSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla device status."""
+class FirewallaUploadSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device upload data rate."""
 
     def __init__(self, coordinator, device):
         """Initialize the sensor."""
-        super().__init__(coordinator, device)
-        self._attr_name = f"{device.get('name', 'Unknown')} Status"
-        self._attr_icon = "mdi:router-wireless"
-
-    def _get_id(self):
-        """Get the ID for this entity."""
-        return f"device_{self._data.get('id', '')}_status"
-
-    def _get_device_id(self):
-        """Get the device ID for this entity."""
-        return self._data.get("id", "unknown")
-
-    def _get_device_name(self):
-        """Get the device name for this entity."""
-        return self._data.get("name", "Unknown Firewalla Device")
-
-    def _get_device_model(self):
-        """Get the device model for this entity."""
-        return self._data.get("model", "Unknown")
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return "unknown"
-            
-        for device in self.coordinator.data["devices"]:
-            if device.get("id") == self._data.get("id"):
-                return device.get("status", "unknown")
-                
-        return "unknown"
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return {}
-            
-        for device in self.coordinator.data["devices"]:
-            if device.get("id") == self._data.get("id"):
-                return {
-                    ATTR_DEVICE_ID: device.get("id"),
-                    ATTR_DEVICE_NAME: device.get("name"),
-                    "ip_address": device.get("ip"),
-                    "mac_address": device.get("mac"),
-                    "last_seen": device.get("last_seen"),
-                }
-                
-        return {}
+        super().__init__(
+            coordinator,
+            device,
+            "Upload Rate",
+            SensorDeviceClass.DATA_RATE,
+            SensorStateClass.MEASUREMENT,
+            UnitOfDataRate.BYTES_PER_SECOND,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get upload rate from stats if available
+        stats = device.get("stats", {})
+        self._attr_native_value = stats.get("upload", 0)
 
 
-class FirewallaDeviceConnectionsSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla device connections."""
+class FirewallaDownloadSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device download data rate."""
 
     def __init__(self, coordinator, device):
         """Initialize the sensor."""
-        super().__init__(coordinator, device)
-        self._attr_name = f"{device.get('name', 'Unknown')} Connections"
-        self._attr_icon = "mdi:connection"
-        self._attr_unit_of_measurement = "connections"
-
-    def _get_id(self):
-        """Get the ID for this entity."""
-        return f"device_{self._data.get('id', '')}_connections"
-
-    def _get_device_id(self):
-        """Get the device ID for this entity."""
-        return self._data.get("id", "unknown")
-
-    def _get_device_name(self):
-        """Get the device name for this entity."""
-        return self._data.get("name", "Unknown Firewalla Device")
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return 0
-            
-        for device in self.coordinator.data["devices"]:
-            if device.get("id") == self._data.get("id"):
-                return device.get("connections", 0)
-                
-        return 0
+        super().__init__(
+            coordinator,
+            device,
+            "Download Rate",
+            SensorDeviceClass.DATA_RATE,
+            SensorStateClass.MEASUREMENT,
+            UnitOfDataRate.BYTES_PER_SECOND,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get download rate from stats if available
+        stats = device.get("stats", {})
+        self._attr_native_value = stats.get("download", 0)
 
 
-class FirewallaFlowSensor(FirewallaBaseSensor):
-    """Sensor for Firewalla flow."""
+class FirewallaBlockedCountSensor(FirewallaBaseSensor):
+    """Sensor for Firewalla device blocked connections count."""
 
-    def __init__(self, coordinator, flow):
+    def __init__(self, coordinator, device):
         """Initialize the sensor."""
-        super().__init__(coordinator, flow)
-        self._attr_name = f"Flow {flow.get('name', 'Unknown')}"
-        self._attr_icon = "mdi:network"
-
-    def _get_id(self):
-        """Get the ID for this entity."""
-        return f"flow_{self._data.get('id', '')}"
-
-    def _get_device_id(self):
-        """Get the device ID for this entity."""
-        return self._data.get("device_id", "unknown")
-
-    def _get_device_name(self):
-        """Get the device name for this entity."""
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return "Unknown Device"
-            
-        for device in self.coordinator.data["devices"]:
-            if device.get("id") == self._data.get("device_id"):
-                return device.get("name", "Unknown Device")
-                
-        return "Unknown Device"
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        if not self.coordinator.data or "flows" not in self.coordinator.data:
-            return "unknown"
-            
-        for flow in self.coordinator.data["flows"]:
-            if flow.get("id") == self._data.get("id"):
-                return flow.get("status", "unknown")
-                
-        return "unknown"
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        if not self.coordinator.data or "flows" not in self.coordinator.data:
-            return {}
-            
-        for flow in self.coordinator.data["flows"]:
-            if flow.get("id") == self._data.get("id"):
-                return {
-                    "flow_id": flow.get("id"),
-                    "name": flow.get("name"),
-                    "source": flow.get("source"),
-                    "destination": flow.get("destination"),
-                    "protocol": flow.get("protocol"),
-                    "bytes_in": flow.get("bytes_in"),
-                    "bytes_out": flow.get("bytes_out"),
-                }
-                
-        return {}
+        super().__init__(
+            coordinator,
+            device,
+            "Blocked Count",
+            None,
+            SensorStateClass.TOTAL_INCREASING,
+            None,
+        )
+    
+    @callback
+    def _update_attributes(self, device: Dict[str, Any]) -> None:
+        """Update the entity attributes."""
+        super()._update_attributes(device)
+        
+        # Get blocked count from stats if available
+        stats = device.get("stats", {})
+        self._attr_native_value = stats.get("blockedCount", 0)
 
