@@ -119,6 +119,30 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
             ATTR_NETWORK_ID: self.network_id,
         }
         
+        # Add IP address
+        if "ip" in device:
+            self._attr_extra_state_attributes["ip_address"] = device["ip"]
+        
+        # Add MAC address (which is often the id)
+        if "mac" in device:
+            self._attr_extra_state_attributes["mac_address"] = device["mac"]
+        
+        # Add network name
+        if "networkName" in device:
+            self._attr_extra_state_attributes["network_name"] = device["networkName"]
+        
+        # Add group name if available
+        if "groupName" in device:
+            self._attr_extra_state_attributes["group_name"] = device["groupName"]
+        
+        # Add IP reservation status
+        if "ipReservation" in device:
+            self._attr_extra_state_attributes["ip_reserved"] = device["ipReservation"]
+        
+        # Add MAC vendor information
+        if "macVendor" in device:
+            self._attr_extra_state_attributes["mac_vendor"] = device["macVendor"]
+        
         # Add last seen timestamp if available
         last_active = device.get("lastActiveTimestamp")
         if last_active:
@@ -145,11 +169,6 @@ class FirewallaOnlineSensor(CoordinatorEntity, BinarySensorEntity):
                 
             except (ValueError, TypeError):
                 pass
-        
-        # Add IP and MAC addresses if available
-        for attr in ["ip", "mac"]:
-            if attr in device:
-                self._attr_extra_state_attributes[attr] = device[attr]
 
 
 class FirewallaBoxOnlineSensor(CoordinatorEntity, BinarySensorEntity):

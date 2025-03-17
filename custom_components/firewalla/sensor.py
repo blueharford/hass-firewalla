@@ -123,6 +123,30 @@ class FirewallaBaseSensor(CoordinatorEntity, SensorEntity):
             ATTR_NETWORK_ID: self.network_id,
             ATTR_DEVICE_NAME: device.get("name", "Unknown"),
         }
+        
+        # Add IP address
+        if "ip" in device:
+            self._attr_extra_state_attributes["ip_address"] = device["ip"]
+        
+        # Add MAC address (which is often the id)
+        if "mac" in device:
+            self._attr_extra_state_attributes["mac_address"] = device["mac"]
+        
+        # Add network name
+        if "networkName" in device:
+            self._attr_extra_state_attributes["network_name"] = device["networkName"]
+        
+        # Add group name if available
+        if "groupName" in device:
+            self._attr_extra_state_attributes["group_name"] = device["groupName"]
+        
+        # Add IP reservation status
+        if "ipReservation" in device:
+            self._attr_extra_state_attributes["ip_reserved"] = device["ipReservation"]
+        
+        # Add MAC vendor information
+        if "macVendor" in device:
+            self._attr_extra_state_attributes["mac_vendor"] = device["macVendor"]
 
 
 class FirewallaUploadSensor(FirewallaBaseSensor):
