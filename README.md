@@ -33,7 +33,7 @@ This integration allows you to monitor and control your Firewalla devices from H
 1. Go to Home Assistant > Settings > Devices & Services
 2. Click "Add Integration"
 3. Search for "Firewalla" and select it
-4. Enter your Firewalla subdomain (e.g., dn-jeyeek)
+4. Enter your Firewalla subdomain (e.g., <mysubdomain>)
    - This is the unique subdomain for your MSP account (the part before .firewalla.net)
 5. Enter your Firewalla API token
    - To get your API token, go to your Firewalla MSP account > Account Settings > Create New Token
